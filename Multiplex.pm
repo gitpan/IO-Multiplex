@@ -272,7 +272,7 @@ use Data::Dumper;
 use Tie::RefHash;
 use Carp qw(cluck);
     
-$VERSION = '0.02';
+$VERSION = '0.03';
 
 BEGIN {
     eval {
@@ -599,8 +599,11 @@ sub loop
 
                         if (exists $self->{_fhs}{$fh}) {
                             delete $self->{_fhs}{$fh}{inbuffer};
+                            # The mux_eof handler could have responded
+                            # with a shutdown for writing.
+                            $self->close($fh)
+                                unless $self->{_fhs}{$fh}{outbuffer};
                         }
-
                         next;
                     }
                 }
@@ -791,9 +794,6 @@ sub fd_set
 
 sub fd_isset
 {
-    cluck("undefined filehandle:") unless defined $_[1];
-    cluck("undefined vec:") unless defined $_[0];
-    cluck("undefined fileno:") unless defined fileno($_[1]);
     vec($_[0], fileno($_[1]), 1);
 }
 

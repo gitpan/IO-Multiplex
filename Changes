@@ -5,3 +5,8 @@ Revision history for Perl extension IO::Multiplex.
 
 0.02  Wed Sep 22 15:44:28 PDT 1999
 	- Check for errors on accept
+
+0.03  Tue Sep 28 12:04:53 MDT 1999
+	- Remove some debugging stuff
+	- Deal properly with the situation where a fd is shutdown in
+	  response to EOF
