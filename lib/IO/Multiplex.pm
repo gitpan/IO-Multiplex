@@ -2,30 +2,30 @@ package IO::Multiplex;
 
 =head1 NAME
 
-   IO::Multiplex - Manage Input/Output on many file handles
+IO::Multiplex - Manage IO on many file handles
 
 =head1 SYNOPSIS
 
-    use IO::Multiplex;
+  use IO::Multiplex;
 
-    my $mux = new IO::Multiplex;
-    $mux->add($fh1);
-    $mux->add(\*FH2);
-    $mux->set_callback_object(...);
-    $mux->listen($server_socket);
-    $mux->loop;
+  my $mux = new IO::Multiplex;
+  $mux->add($fh1);
+  $mux->add(\*FH2);
+  $mux->set_callback_object(...);
+  $mux->listen($server_socket);
+  $mux->loop;
 
-    sub mux_input {
-       ...
-    }
-
-=head1 DESCRIPTION
+  sub mux_input {
+    ...
+  }
 
 C<IO::Multiplex> is designed to take the effort out of managing
 multiple file handles.  It is essentially a really fancy front end to
 the C<select> system call.  In addition to maintaining the C<select>
 loop, it buffers all input and output to/from the file handles.  It
 can also accept incoming connections on one or more listen sockets.
+
+=head1 DESCRIPTION
 
 It is object oriented in design, and will notify you of significant events
 by calling methods on an object that you supply.  If you are not using
@@ -159,7 +159,6 @@ This example is a simple chat server.
 
     use IO::Socket;
     use IO::Multiplex;
-    use Tie::RefHash;
 
     my $mux  = new IO::Multiplex;
 
@@ -269,10 +268,9 @@ use Socket;
 use FileHandle qw(autoflush);
 use Fcntl;
 use Data::Dumper;
-use Tie::RefHash;
 use Carp qw(cluck);
 
-$VERSION = '1.02';
+$VERSION = '1.03';
 
 BEGIN {
     eval {
@@ -299,8 +297,8 @@ sub new
     my $self = bless { _readers     => '',
                        _writers     => '',
                        _fhs         => {},
+                       _handles     => {},
                        _listen      => {}  } => $package;
-    tie %{$self->{_fhs}}, "Tie::RefHash";
     $self;
 }
 
@@ -351,6 +349,7 @@ sub add
     $self->{_fhs}{$fh}{inbuffer} = '';
     $self->{_fhs}{$fh}{outbuffer} = '';
     $self->{_fhs}{$fh}{fileno} = fileno($fh);
+    $self->{_handles}{$fh} = $fh;
     tie *$fh, "MVModule::MVmux::Handle", $self, $fh;
     $fh;
 }
@@ -372,6 +371,7 @@ sub remove
     fd_set($self->{_writers}, $fh, 0);
     fd_set($self->{_readers}, $fh, 0);
     delete $self->{_fhs}{$fh};
+    delete $self->{_handles}{$fh};
     untie *$fh;
 }
 
@@ -516,7 +516,7 @@ sub handles
 {
     my $self = shift;
 
-    grep(!$self->{_fhs}{$_}{listen}, keys %{$self->{_fhs}});
+    grep(!$self->{_fhs}{$_}{listen}, values %{$self->{_handles}});
 }
 
 =head2 loop
@@ -561,7 +561,7 @@ sub loop
         }
         &{ $heartbeat } ($rdready, $wrready) if $heartbeat;
 
-        foreach my $fh (keys %{$self->{_fhs}}) {
+        foreach my $fh (values %{$self->{_handles}}) {
             # Avoid creating a permanent empty hash ref for "$fh"
             # by attempting to access its {object} element
             # if it has already been closed.
@@ -795,10 +795,10 @@ sub close
     fd_set($self->{_writers}, $fh, 0);
 
     delete $self->{_fhs}{$fh};
+    delete $self->{_handles}{$fh};
     untie *$fh;
     close $fh;
     $obj->mux_close($self, $fh) if $obj && $obj->can("mux_close");
-    delete $self->{_fhs}{$fh};
 }
 
 # We set non-blocking mode on all descriptors.  If we don't, then send

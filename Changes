@@ -30,14 +30,21 @@ Revision history for Perl extension IO::Multiplex.
 	- Stable enough now.  Call it a release.
 
 1.01  Wed Oct 17 13:00:00 MDT 2001
-	- The following by Rob Brown <rob@roobik.com>
+	- The following by Rob Brown <bbb@cpan.org>
 	- Ported to work with Perl 5.6.0
 	- Added optional code ref for loop
 	- Added tie FILENO method
 	- Fixed tie CLOSE and shutdown to flush both
           input {inbuffer} and output {outbuffer} correctly
 
-1.02  Tue Feb 05 13:05:00 MDT 2001
+1.02  Tue Feb 05 13:05:00 MDT 2002
 	- Allow the rest of input buffer to be consumed
 	  when doing shutdown.
 	- Fix {_fhs} keys dereference race condition.
+
+1.03  Mon Jun 03 15:00:00 MDT 2002
+	- Fix NAME for ABSTRACT_FROM setting.
+	- Added spec file for RPM
+	- Added TODO doc
+	- Avoid using Tie::RefHash to improve performance.
+	  by dwebb@ovid.com (Douglas Webb)
