@@ -1,4 +1,6 @@
-MANIFEST         this file.
-MANIFEST.SKIP    files to ignore while generating the dist file.
-Multiplex.pm     the multiplex module.
-Makefile.PL      makefile generator.
+Changes
+README
+MANIFEST
+Makefile.PL
+Multiplex.pm
+test.pl

@@ -1,9 +1,7 @@
-# *- perl -*
 use ExtUtils::MakeMaker;
-
-WriteMakefile(NAME => 'IO::Multiplex',
-              VERSION_FROM => 'Multiplex.pm',
-              ABSTRACT_FROM => 'Multiplex.pm',
-              AUTHOR => 'Liraz Siri <liraz_siri@usa.net>, Ariel, Israel');
-
-
+# See lib/ExtUtils/MakeMaker.pm for details of how to influence
+# the contents of the Makefile that is written.
+WriteMakefile(
+    'NAME'	=> 'IO::Multiplex',
+    'VERSION_FROM' => 'Multiplex.pm', # finds $VERSION
+);

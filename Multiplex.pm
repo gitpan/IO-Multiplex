@@ -1,341 +1,927 @@
 package IO::Multiplex;
-# event driven multiplex server.
-# threading is so much easier but I don't have threads installed yet,
-# and i don't feel like waiting.
-# Wed Mar 10 23:41:15 IST 1999
 
-use IO::Select;
-use IO::Socket;
-use vars qw($VERSION);
+=head1 NAME
 
-$VERSION = '0.1';
+   IO::Multiplex - Manage Input/Output on many file handles
+
+=head1 SYNOPSIS
+
+    use IO::Multiplex;
+
+    my $mux = new IO::Multiplex;
+    $mux->add($fh1);
+    $mux->add(\*FH2);
+    $mux->set_callback_object(...);
+    $mux->listen($server_socket);
+    $mux->loop;
+
+    sub mux_input {
+       ...
+    }
+
+=head1 DESCRIPTION
+
+C<IO::Multiplex> is designed to take the effort out of managing
+multiple file handles.  It is essentially a really fancy front end to
+the C<select> system call.  In addition to maintaining the C<select>
+loop, it buffers all input and output to/from the file handles.  It
+can also accept incoming connections on one or more listen sockets.
+
+It is object oriented in design, and will notify you of significant events
+by calling methods on an object that you supply.  If you are not using
+objects, you can simply supply C<__PACKAGE__> instead of an object reference.
+
+You may have one callback object registered for each file handle, or
+one global one.  Possibly both -- the per-file handle callback object
+will be used instead of the global one.
+
+Each file handle may also have a timer associated with it.  A callback
+function is called when the timer expires.
+
+=head2 Handling input on descriptors
+
+When input arrives on a file handle, the C<mux_input> method is called
+on the appropriate callback object.  This method is passed three
+arguments (in addition to the object reference itself of course):
+
+=over 4
+
+=item 1
+
+a reference to the mux,
+
+=item 2
+
+A reference to the file handle, and
+
+=item 3
+
+a reference to the input buffer for the file handle.
+
+=back
+
+The method should remove the data that it has consumed from the
+reference supplied.  It may leave unconsumed data in the input buffer.
+
+=head2 Handling output to descriptors
+
+If C<IO::Multiplex> did not handle output to the file handles as well
+as input from them, then there is a chance that the program could
+block while attempting to write.  If you let the multiplexer buffer
+the output, it will write the data only when the file handle is
+capable of receiveing it.
+
+The basic method for handing output to the multiplexer is the C<write>
+method, which simply takes a file descriptor and the data to be
+written, like this:
+
+    $mux->write($fh, "Some data");
+
+For convenience, when the file handle is C<add>ed to the multiplexer, it
+is tied to a special class which intercepts all attempts to write to the
+file handle.  Thus, you can use print and printf to send output to the
+handle in a normal manner:
+
+    printf $fh "%s%d%X", $foo, $bar, $baz
+
+Unfortunately, Perl support for tied file handles is incomplete, and
+functions such as C<send> cannot be supported.
+
+Also, file handle object methods such as the C<send> method of
+C<IO::Socket> cannot be intercepted.
+
+=head1 EXAMPLES
+
+=head2 Simple Example
+
+This is a simple telnet-like program, which demonstrates the concepts
+covered so far.  It does not really work too well against a telnet
+server, but it does OK against the sample server presented further down.
+
+    use IO::Socket;
+    use IO::Multiplex;
+
+    # Create a multiplex object
+    my $mux  = new IO::Multiplex;
+    # Connect to the host/port specified on the command line,
+    # or localhost:23
+    my $sock = new IO::Socket::INET(Proto    => 'tcp',
+                                    PeerAddr => shift || 'localhost',
+                                    PeerPort => shift || 23)
+        or die "socket: $@";
+
+    # add the relevant file handles to the mux
+    $mux->add($sock);
+    $mux->add(\*STDIN);
+    # We want to buffer output to the terminal.  This prevents the program
+    # from blocking if the user hits CTRL-S for example.
+    $mux->add(\*STDOUT);  
+
+    # We're not object oriented, so just request callbacks to the
+    # current package
+    $mux->set_callback_object(__PACKAGE__);
+
+    # Enter the main mux loop.
+    $mux->loop;
+
+    # mux_input is called when input is available on one of
+    # the descriptors.
+    sub mux_input {
+        my $package = shift;
+        my $mux     = shift;
+        my $fh      = shift;
+        my $input   = shift;
+
+        # Figure out whence the input came, and send it on to the
+        # other place.
+        if ($fh == $sock) {
+            print STDOUT $$input;
+        } else {
+            print $sock $$input;
+        }
+        # Remove the input from the input buffer.
+        $$input = '';
+    }
+
+    # This gets called if the other end closes the connection.
+    sub mux_close {
+        print STDERR "Connection Closed\n";
+        exit;
+    }
+
+=head2 A server example
+
+Servers are just as simple to write.  We just register a listen socket
+with the multiplex object C<listen> method.  It will automatically
+accept connections on it and add them to its list of active file handles.
+
+This example is a simple chat server.  
+
+    use IO::Socket;
+    use IO::Multiplex;
+    use Tie::RefHash;
+    
+    my $mux  = new IO::Multiplex;
+
+    # Create a listening socket
+    my $sock = new IO::Socket::INET(Proto     => 'tcp',
+                                    LocalPort => shift || 2300,
+                                    Listen    => 4)
+        or die "socket: $@";
+
+    # We use the listen method instead of the add method.
+    $mux->listen($sock);
+    
+    $mux->set_callback_object(__PACKAGE__);
+    $mux->loop;
+    
+    sub mux_input {
+        my $package = shift;
+        my $mux     = shift;
+        my $fh      = shift;
+        my $input   = shift;
+
+        # The handles method returns a list of references to handles which
+        # we have registered, except for listen sockets.
+        foreach $c ($mux->handles) {
+            print $c $$input;
+        }
+        $$input = '';
+    }
+
+=head2 A more complex server example
+
+Let us take a look at the beginnings of a multi-user game server.  We will
+have a Player object for each player.
+
+    # Paste the above example in here, up to but not including the
+    # mux_input subroutine.
+
+    # mux_connection is called when a new connection is accepted.
+    sub mux_connection {
+        my $package = shift;
+        my $mux     = shift;
+        my $fh      = shift;
+
+        # Construct a new player object
+        Player->new($mux, $fh);
+    }
+
+    package Player;
+
+    my %players = ();
+
+    sub new {
+        my $package = shift;
+        my $self    = bless { mux  => shift,
+                              fh   => shift } => $package;
+
+        # Register the new player object as the callback specifically for
+        # this file handle.
+
+        $self->{mux}->set_callback_object($self, $self->{fh});
+        print $self->{fh}
+            "Greetings, Professor.  Would you like to play a game?\n";
+
+        # Register this player object in the main list of players
+        $players{$self} = $self;
+        $mux->set_timeout($self->{fh}, 1);
+    }
+
+    sub players { return values %players; }
+
+    sub mux_input {
+        my $self = shift;
+        shift; shift;         # These two args are boring
+        my $input = shift;    # Scalar reference to the input
+
+        # Process each line in the input, leaving partial lines
+        # in the input buffer
+        while ($$input =~ s/^(.*?)\n//) {
+            $self->process_command($1);
+        }
+    }
+    
+    sub mux_close {
+       my $self = shift;
+
+       # Player disconnected;
+       # [Notify other players or something...]
+       delete $players{$self};
+    }
+    # This gets called every second to update player info, etc...
+    sub mux_timeout {
+        my $self = shift;
+        my $mux  = shift;
+        
+        $self->heartbeat;
+        $mux->set_timeout($self->{fh}, 1);
+    }
+
+=head1 METHODS
+
+=cut
 
 use strict;
+use POSIX qw(errno_h BUFSIZ);
+use vars qw($VERSION);
+use Socket;
+use FileHandle qw(autoflush);
+use Fcntl;
+use Data::Dumper;
+use Tie::RefHash;
+use Carp qw(cluck);
+    
+$VERSION = '0.01';
 
-# constructor.
+BEGIN {
+    eval {
+        # Can optionally use Hi Res timers if available
+        require Time::HiRes;
+        Time::HiRes->import ('time');
+    }
+};
+
+# This is what you want.  Trust me.
+$SIG{PIPE} = 'IGNORE';
+
+=head2 new
+
+Construct a new C<IO::Multiplex> object.
+
+    $mux = new IO::Multiplex;
+
+=cut
+
 sub new
 {
-    my $proto = shift;
-    my $class = ref($proto) || $proto;
-    my %args = @_;
-
-    my $self = {
-	'loop_timeout' => 60,
-        map {$_ => undef} ('localpath', 'localaddr', 'localport', 'proto'),
-    };
-    extract_args($self, \%args);
-
-    $self->{'last_timeout'} = time;
-    
-    $self->{'proto'} ||= ($self->{'localpath'} ? 'unix' : 'tcp');
-    if($self->{'proto'} eq 'unix') {
-        unlink($self->{'localpath'});
-        die "localpath missing" unless $self->{'localpath'};
-        die "can't remove stale link" if -e $self->{'localpath'};
-        umask 0;
-        $self->{'socket'} = IO::Socket::UNIX->new
-            ('Local' => $self->{'localpath'},
-             'Listen' => $self->{'listen'} || 10);
-        umask 022;
-        
-    } else {
-        die "localport missing"
-            unless($self->{'localport'}
-                   || index($self->{'localpath'}, ':') != -1);
-        $self->{'socket'} = IO::Socket::INET->new
-            ('LocalAddr' => $self->{'localaddr'},
-             'LocalPort' => $self->{'localport'},
-             'Proto' => $self->{'proto'},
-             'Listen' => $self->{'listen'} || 10,
-             'Reuse' => 1);
-    };
-    die "can't create listen socket" unless $self->{'socket'};
-
-    $self->{'select_obj'} = IO::Select->new($self->{'socket'});
-    $self->{'handlers'} = init_handlers();
-    
-    bless($self, $class);
+    my $package = shift;
+    my $self = bless { _readers     => '',
+                       _writers     => '',
+                       _fhs         => {},
+                       _listen      => {}  } => $package;
+    tie %{$self->{_fhs}}, "Tie::RefHash";
+    $self;
 }
 
-# destructor.
+=head2 listen
+
+Add a socket to be listened on.  The socket should have had the
+C<bind> and C<listen> system calls already applied to it.  The C<IO::Socket>
+module will do this for you.
+
+    $socket = new IO::Socket::INET(Listen => ..., LocalAddr => ...);
+    $mux->listen($socket);
+
+Connections will be automatically accepted and C<add>ed to the multiplex
+object.  C<The mux_connection> callback method will also be called.
+
+=cut
+
+sub listen
+{
+    my $self = shift;
+    my $fh   = shift;
+    
+    $self->add($fh);
+    $self->{_fhs}{$fh}{listen} = 1;
+}
+
+=head2 add
+
+Add a file handle to the multiplexer.
+
+    $mux->add($fh);
+
+As a side effect, this sets non-blocking mode on the handle, and disables
+STDIO buffering.  It also ties it to intercept output to the handle.
+
+=cut
+
+sub add
+{
+    my $self = shift;
+    my $fh   = shift;
+
+    return if $self->{_fhs}{$fh};
+    
+    nonblock($fh);
+    autoflush($fh, 1);
+    fd_set($self->{_readers}, $fh, 1);
+    $self->{_fhs}{$fh}{inbuffer} = '';
+    $self->{_fhs}{$fh}{outbuffer} = '';
+    $self->{_fhs}{$fh}{fileno} = fileno($fh);
+    tie *$fh, "MVModule::MVmux::Handle", $self, $fh;
+    $fh;
+}    
+
+=head2 remove
+
+Removes a file handle from the multiplexer.  This also unties the
+handle.  It does not currently turn STDIO buffering back on, or turn
+off non-blocking mode.
+
+    $mux->remove($fh);
+
+=cut
+
+sub remove
+{
+    my $self = shift;
+    my $fh   = shift;
+    fd_set($self->{_writers}, $fh, 0);
+    fd_set($self->{_readers}, $fh, 0);
+    delete $self->{_fhs}{$fh};
+    untie *$fh;
+}
+
+=head2 set_callback_object
+
+Set the object on which callbacks are made.  If you are not using objects,
+you can specify the name of the package into which the method calls are
+to be made.
+
+If a file handle is supplied, the callback object is specific for that
+handle:
+
+    $mux->set_callback_object($object, $fh);
+
+Otherwise, it is considered a default callback object, and is used when
+events occur on a file handle that does not have its own callback object.
+
+    $mux->set_callback_object(__PACKAGE__);
+
+The previously registered object (if any) is returned.
+
+See also the CALLBACK INTERFACE section.
+
+=cut
+
+sub set_callback_object
+{
+    my $self = shift;
+    my $obj  = shift;
+    my $fh   = shift;
+    my $old  = $fh ? $self->{_fhs}{$fh}{object} : $self->{_object};
+
+    $fh ? $self->{_fhs}{$fh}{object} : $self->{_object} = $obj;
+    $old;
+}
+
+=head2 kill_output
+
+Remove any pending output on a file descriptor.
+
+    $mux->kill_output($fh);
+
+=cut
+
+sub kill_output
+{
+    my $self = shift;
+    my $fh   = shift;
+
+    $self->{_fhs}{$fh}{outbuffer} = '';
+    fd_set($self->{_writers}, $fh, 0);
+}
+
+=head2 outbuffer
+
+Return or set the output buffer for a descriptor
+
+    $output = $mux->outbuffer($fh);
+    $mux->outbuffer($fh, $output);
+
+=cut
+
+sub outbuffer
+{
+    my $self = shift;
+    my $fh   = shift;
+
+    if (@_) {
+        $self->{_fhs}{$fh}{outbuffer} = $_[0] if @_;
+        fd_set($self->{_writers}, $fh, 0) if !$_[0];
+    }
+
+    $self->{_fhs}{$fh}{outbuffer};
+}
+
+=head2 inbuffer
+
+Return or set the input buffer for a descriptor
+
+    $input = $mux->inbuffer($fh);
+    $mux->inbuffer($fh, $input);
+
+=cut
+
+sub inbuffer
+{
+    my $self = shift;
+    my $fh   = shift;
+
+    if (@_) {
+        $self->{_fhs}{$fh}{inbuffer} = $_[0] if @_;
+    }
+
+    $self->{_fhs}{$fh}{inbuffer};
+}
+
+=head2 set_timeout
+
+Set the timer for a file handle.  The timeout value is a certain number of
+seconds in the future, after which the C<mux_timeout> callback is called.
+
+If the C<Time::HiRes> module is installed, the timers may be specified in
+fractions of a second.
+
+Timers are not reset automatically.
+
+    $mux->set_timeout($fh, 23.6);
+
+Use C<$mux-E<gt>set_timeout($fh, undef)> to cancel a timer.
+
+=cut
+
+sub set_timeout
+{
+    my $self     = shift;
+    my $fh       = shift;
+    my $timeout  = shift;
+
+    if (defined $timeout) {
+        $self->{_fhs}{$fh}{timeout} = $timeout + time;
+    } else {
+        $self->{_fhs}{$fh}{timeout} = undef;
+    }
+}
+
+=head2 handles
+
+Returns a list of handles that the C<IO::Multiplex> object knows about,
+excluding listen sockets.
+
+    @handles = $mux->handles;
+
+=cut
+
+sub handles
+{
+    my $self = shift;
+
+    grep(!$self->{_fhs}{$_}{listen}, keys %{$self->{_fhs}});
+}
+
+=head2 loop
+
+Enter the main loop and start processing IO events.
+
+    $mux->loop;
+
+=cut
+
+sub loop
+{
+    my $self = shift;
+    $self->{_endloop} = 0;
+
+    while (!$self->{_endloop} && keys %{$self->{_fhs}}) {
+        my $rv;
+        my $data;
+        my $rdready;
+        my $wrready;
+        my $timeout = undef;
+        
+        my @timeouts = sort { $a <=> $b } map {
+            defined $_->{timeout} ? $_->{timeout} : ()
+        } values %{$self->{_fhs}};
+        if (@timeouts) {
+            $timeout = $timeouts[0] - time;
+        }
+        
+        my $numready = select($rdready=$self->{_readers},
+                              $wrready=$self->{_writers},
+                              undef,
+                              $timeout);
+
+        unless(defined($numready)) {
+            if ($! == EINTR || $! == EAGAIN) {
+                next;
+            } else {
+                last;
+            }
+        }
+        foreach my $fh (keys %{$self->{_fhs}}) {
+            # Get the callback object.
+            my $obj = $self->{_fhs}{$fh}{object} ||
+                $self->{_object};
+
+            # Is this descriptor ready for reading?
+            if (fd_isset($rdready, $fh))
+            {
+                if ($self->{_fhs}{$fh}{listen}) {
+                    # It's a server socket, so a new connection is
+                    # waiting to be accepted
+                    my $client = $fh->accept;
+                    $self->add($client);
+                    $obj->mux_connection($self, $client)
+                        if $obj && $obj->can("mux_connection");
+                } else {
+                    # Have to alias the glob to avoid the tie
+                    local *FOO = *$fh;
+                    $rv = sysread(FOO, $data, BUFSIZ);
+
+                    if (defined($rv) && length($data)) {
+                        # Append the data to the client's receive buffer,
+                        # and call process_input to see if anything needs to
+                        # be done.
+                        $self->{_fhs}{$fh}{inbuffer} .= $data;
+                        $obj->mux_input($self, $fh,
+                                        \$self->{_fhs}{$fh}{inbuffer})
+                            if $obj && $obj->can("mux_input");
+                    } else {
+                        next if $! == EINTR || $! == EAGAIN
+                            || $! == EWOULDBLOCK;
+                        # There's an error, or we received EOF.  If
+                        # there's pending data to be written, we leave
+                        # the connection open so it can be sent.  If
+                        # the other end is closed for writing, the
+                        # send will error and we close down there.
+                        # Either way, we remove it from $readers as
+                        # we're no longer interested in reading from
+                        # it.
+                        fd_set($self->{_readers}, $fh, 0);
+                        $obj->mux_eof($self, $fh,
+                                      \$self->{_fhs}{$fh}{inbuffer})
+                            if $obj && $obj->can("mux_eof");
+
+                        if (exists $self->{_fhs}{$fh}) {
+                            delete $self->{_fhs}{$fh}{inbuffer};
+                        }
+
+                        next;
+                    }
+                }
+            }  # end if readable
+        
+            if (fd_isset($wrready, $fh)) {
+                unless ($self->{_fhs}{$fh}{outbuffer}) {  # Shouldn't happen
+                    fd_set($self->{_writers}, $fh, 0);
+                    next;
+                }
+                # Can't just syswrite directly to $fh, or it would call
+                # the tied write.
+                local *FOO = *$fh;
+                $rv = syswrite(FOO, $self->{_fhs}{$fh}{outbuffer},
+                               length($self->{_fhs}{$fh}{outbuffer}));
+                unless (defined($rv)) {
+                    # We got an error writing to it.  If it's
+                    # EWOULDBLOCK (shouldn't happen if select told us
+                    # we can write) or EAGAIN, or EINTR we don't worry
+                    # about it.  otherwise, close it down.
+                    $self->close($fh) unless ($! == EWOULDBLOCK ||
+                                              $! == EINTR ||
+                                              $! == EAGAIN);
+                    next;
+                }
+                substr($self->{_fhs}{$fh}{outbuffer}, 0, $rv) = '';
+                unless ($self->{_fhs}{$fh}{outbuffer}) {
+                    # Mark us as not writable if there's nothing more to
+                    # write
+                    fd_set($self->{_writers}, $fh, 0);
+                    $obj->mux_outbuffer_empty($self, $fh)
+                        if ($obj && $obj->can("mux_outbuffer_empty"));
+
+                    if ($self->{_fhs}{$fh}{shutdown}) {
+                        # If we've been marked for shutdown after write
+                        # do it.
+                        shutdown($fh, 1);
+                        delete $self->{_fhs}{$fh}{outbuffer};
+                        unless (exists $self->{_fhs}{$fh}{inbuffer}) {
+                            # We'd previously been shutdown for reading
+                            # also, so close out completely
+                            $self->close($fh);
+                            next;
+                        }
+                    }
+                }
+            }  # End if writeable
+            if ($self->{_fhs}{$fh}{timeout} &&
+                $self->{_fhs}{$fh}{timeout} < time &&
+                $obj && $obj->can("mux_timeout"))
+            {
+                $self->{_fhs}{$fh}{timeout} = undef;
+                $obj->mux_timeout($self, $fh);
+            }
+                
+        }  # End foreach $fh (...)
+    } # End while(loop)
+}
+
+=head2 endloop
+
+Prematurly terminate the loop.  The loop will automatically terminate
+when there are no remaining descriptors to be watched.
+
+    $mux->endloop;
+
+=cut
+
+sub endloop
+{
+    my $self = shift;
+    $self->{_endloop} = 1;
+}
+
+=head2 write
+
+Send output to a file handle.
+
+    $mux->write($fh, "'ere I am, JH!\n");
+
+=cut
+
+sub write
+{
+    my $self = shift;
+    my $fh   = shift;
+    my $data = shift;
+
+    if ($self->{_fhs}{$fh}{shutdown}) {
+        $! = EPIPE;
+        return undef;
+    }
+    $self->{_fhs}{$fh}{outbuffer} .= $data;
+    fd_set($self->{_writers}, $fh, 1);
+    length($data);
+}
+
+=head2 shutdown
+
+Shut down a socket for reading or writing or both.  See the C<shutdown>
+Perl documentation for further details.
+
+If the shutdown is for reading, it happens immediately.  However,
+shutdowns for writing are delayed until any pending output has been
+successfully written to the socket.
+
+    $mux->shutdown($socket, 1);
+
+=cut
+
+sub shutdown
+{
+    my $self = shift;
+    my $fh = shift;
+    my $which = shift;
+    
+    if ($which == 0 || $which == 2) {
+        # Shutdown for reading.  We can do this now.
+        shutdown($fh, 0);
+        fd_set($self->{_readers}, $fh, 0);
+        delete $self->{_fhs}{$fh}{inbuffer};
+    }
+    
+    if ($which == 1 || $which == 2) {
+        # Shutdown for writing.  Only do this now if there is no pending
+        # data.
+        if ($self->{_fhs}{$fh}{outbuffer}) {
+            $self->{_fhs}{$fh}{shutdown} = 1;
+        } else {
+            shutdown($fh, 1);
+            delete $self->{_fhs}{$fh}{outbuffer};
+        }
+    }
+    # Delete the descriptor if it's totally gone.
+    unless (exists $self->{_fhs}{$fh}{inbuffer} ||
+            exists $self->{_fhs}{$fh}{outbuffer}) {
+        $self->close($fh);
+    }
+}
+
+=head2 close
+
+Close a handle.  Always use this method to close a handle that is being
+watched by the multiplexer.
+
+    $mux->close($fh);
+
+=cut
+
 sub close
 {
     my $self = shift;
-    my $select = $self->{'select_obj'};
-    my @handles = $select->handles;
-    foreach my $handle (@handles) {
-	$handle->close;
-    }
-}
+    my $fh = shift;
+    
+    my $obj = $self->{_fhs}{$fh}{object} || $self->{_object};
+    warn "closeing with read buffer" if $self->{_fhs}{$fh}{inbuffer};
+    warn "closeing with write buffer" if $self->{_fhs}{$fh}{outbuffer};
 
-# assign a handler to an event;
-sub set_handler
+    vec($self->{_readers}, $self->{_fhs}{$fh}{fileno}, 1) = 0;
+    vec($self->{_writers}, $self->{_fhs}{$fh}{fileno}, 1) = 0;
+    
+    delete $self->{_fhs}{$fh};
+    untie *$fh;
+    close $fh;
+    $obj->mux_close($self, $fh) if $obj && $obj->can("mux_close");
+}    
+
+# We set non-blocking mode on all descriptors.  If we don't, then send
+# might block if the data is larger than the kernel can accept all at once,
+# even though select told us we can write.  With non-blocking mode, we
+# get a partial write in those circumstances, which is what we want.
+
+sub nonblock
 {
-    my ($self, $event, $handler) = @_;
-    $self->{'handlers'}->{$event} = $handler;
+    my $fh = shift;
+    my $flags = fcntl($fh, F_GETFL, 0)
+        or die "fcntl F_GETFL: $!\n";
+    fcntl($fh, F_SETFL, $flags | O_NONBLOCK)
+        or die "fcntl F_SETFL $!\n";
 }
 
-# begin event driven main loop.
-sub start
+sub fd_set
 {
-    my $self = shift;
-
-    for(;;) 
-    {
-	if(time - $self->{'last_timeout'} > $self->{'loop_timeout'})
-	{
-	    $self->handler('loop_timeout')->();
-	    $self->{'last_timeout'} = time;
-	}
-
-	my $select = $self->{'select_obj'};
-	my @ready = $select->can_read($self->{'loop_timeout'});
-	for my $fh (@ready)
-	{
-	    my $listen = $self->{'socket'};
-	    if($fh == $listen)
-	    {
-		my $client = $listen->accept;
-		$client->autoflush;
-
-		if($self->handler('client_connected')->($client)) {
-		    $select->add($client);
-		} else {
-		    $client->close;
-		}
-		next;
-	    }
-
-	    $self->handler('client_input')->($fh);
-	}
-    }
-    # NOT REACHED
+     vec($_[0], fileno($_[1]), 1) = $_[2];
+#     vec($_[0], fileno($_[1]), 1) = $_[2] if fileno($_[1]);
 }
 
-# disconnect a client.
-sub disconnect
+sub fd_isset
 {
-    my ($self, $client) = @_;
-    $self->handler('client_disconnected')->($client);
-    $self->{'select_obj'}->remove($client);
-    $client->close;
+    cluck("undefined filehandle:") unless defined $_[1];
+    cluck("undefined vec:") unless defined $_[0];
+    cluck("undefined fileno:") unless defined fileno($_[1]);
+    vec($_[0], fileno($_[1]), 1);
 }
 
-######################################
-# PRIVATE: TRESPASSERS WILL BE SHOT. #
-######################################
-sub init_handlers
+# We tie handles into this package to handle write buffering.
+
+package MVModule::MVmux::Handle;
+
+use Tie::Handle;
+use Carp;
+use vars qw(@ISA);
+@ISA = qw(Tie::Handle);
+
+sub TIEHANDLE
 {
-    my $handlers;
-    my @events = ('loop_timeout',
-		  'client_connected', 'client_disconnected', 'client_input');
-
-    foreach my $event (@events) { $handlers->{$event} = sub {} }
-    return $handlers;
+    my $package = shift;
+    my $mux = shift;
+    my $fh  = shift;
+    
+    my $self = bless { _mux   => $mux,
+                       _fh    => $fh }
 }
 
-sub handler
-{
-    my ($self, $event) = @_;
-    return $self->{'handlers'}->{$event};
-}
-
-# extract from caller's argument hash list to local argument hash list.
-sub extract_args
-{
-    my ($local_args, $caller_args) = @_;
-    foreach my $argument_key (keys %$caller_args)
-    {
-	next unless(exists $local_args->{lc $argument_key});
-	$local_args->{lc $argument_key} = $caller_args->{$argument_key};
-	delete $caller_args->{$argument_key};
-    }
-    return $local_args;
-}
-
-sub DESTROY
+sub WRITE
 {
     my $self = shift;
-    $self->close;
+    my ($msg, $len, $offset) = @_;
+    $offset ||= 0;
+    $self->{_mux}->write($self->{_fh}, substr($msg, $offset, $len));
+}
+
+# XXX This isn't quite right.
+sub CLOSE
+{
+    my $self = shift;
+    $self->{_mux}->close($self->{_fh});
+}
+
+sub READ
+{
+    carp "Do not read from a muxed file handle";
+}
+
+sub READLINE
+{
+    carp "Do not read from a muxed file handle";
+}
+
+sub FETCH
+{
+    return "Fnord";
 }
 
 1;
 
 __END__
 
-=head1 NAME
+=head1 CALLBACK INTERFACE
 
-IO::Multiplex - Object interface to multiplex-style server implementations.
+Callback objects should support the following interface.  You do not have
+to provide all of these methods, just provide the ones you are interested in.
 
-=head1 SYNOPSIS
+All methods receive a reference to the callback object (or package) as
+their first argument, in the traditional object oriented
+way. References to the C<IO::Multiplex> object and the relevant file
+handle are also provided.  This will be assumed in the method
+descriptions.
 
-use IO::Multiplex;
+=head2 mux_input
 
-=head1 DESCRIPTION
+Called when input is ready on a descriptor.  It is passed a reference to
+the input buffer.  It should remove any input that it has consumed, and
+leave any partially received data in the buffer.
 
-IO::Multiplex is an object interface to classic multiplex server designs.
+    sub mux_input {
+        my $self = shift;
+        my $mux  = shift;
+        my $fh   = shift;
+        my $data = shift;
 
-Alarmed by the time I was wasting re-implementing a fairly straightforward
-multiplexing server design, I decided it was time I abstracted the problem into
-an object for re-use. If the term 'multiplexing' preplexes you, read
-L<select(2)>, or read a good book on socket communications, I'm pretty sure
-most of them cover the subject.
+        # Process each line in the input, leaving partial lines
+        # in the input buffer
+        while ($$input =~ s/^(.*?\n)//) {
+            $self->process_command($1);
+        }
+    }
 
-This implementation is based on an event model. Users (programmers)
-control server behaviour by assigning handlers to certain server events
-(client connected, disconnected, input from client, server timeout).
+=head2 mux_eof
 
-=head1 CONSTRUCTOR
+This is called when an end-of-file condition is present on the descriptor.
+This is does not nessecarily mean that the descriptor has been closed, as
+the other end of a socket could have used C<shutdown> to close just half
+of the socket, leaving us free to write data back down the still open
+half.
 
-=over 4
-    
-=item IO::Multiplex->new( %options );        
+In this example, we send a final reply to the other end of the socket,
+and then shut it down for writing.  Since it is also shut down for reading
+(implicly by the EOF condition), it will be closed once the output has
+been sent, after which the mux_close callback will be called.
 
-Server construction arguments are supplied in a hash format.
+    sub mux_eof {
+        my $self = shift;
+        my $mux  = shift;
+        my $fh   = shift;
 
-IO::Multiplex->new(arg1 => 'val1', arg2 => 'val2' ...)
+        print $fh "Well, goodbye then!\n";
+        $mux->shutdown($fh, 1);
+    }
 
-=head2 ARGUMENTS
+=head2 mux_close
 
-Arguments define how the server will communicate with it's clients.
+Called when a handle has been completely closed.  At the time that
+C<mux_close> is called, the handle will have been removed from the
+multiplexer, and untied.
 
-=item 'loop_timeout'
+=head2 mux_outbuffer_empty
 
-Users may sometime find it useful to schedule a handler to be re-executed
-periodicly within the server's main event loop every defined number of
-seconds. Setting this argument will define the time interval between
-executions of the 'timeout' event.
+Called after all pending output has been written to the file descriptor.
 
-=item 'proto'
+=head2 mux_connection
 
-Optional. Setting this argument will define the server's
-communication layer with it's clients. Common values are 'unix' and 'tcp'.
-Other values ('udp' ?) are passed on to the IO::Socket::INET object.
+Called upon a new connection being accepted on a listen socket.
 
-If left undefined, IO::Multiplex will determine the server's transport
-layer by looking at some of the other arguments. 
+=head2 mux_timeout
 
-example: ('proto' => 'tcp', ...)
-
-=item 'localpath'
-
-Passed on to the IO::Socket::UNIX object constructor,
-as the 'Local' options.
-
-B<Warnings>: we remove stale sockets by unlinking 'localpath' for you,
-any other file that happens to be there is removed with B<no> warning.
-
-Sockets are created with full world read-write permissions.
-This means any local user with execute permissions on
-the target directory can talk to the server.
-
-B<Restrictions>: Please realize you do need ordinary file write permissions
-to create a socket in a directory of choice.
-
-=item 'localaddr'
-
-Optional. Passed on to the IO::Socket::INET object constructor,
-as the 'LocalAddr' option.
-
-Setting this argument will define the server's local
-bind address, which is necessary in the case of multiple local network
-interfaces (routers, firewalls, proxies).
-
-If left undefined, IO::Socket::INET will assume 'localhost'.
-
-example: ('localaddr' => 'localhost', ...)
-
-=item 'localport'
-
-Passed on to the IO::socket::INET object constructor.
-Setting this argument will define the server's local bind port.
-
-B<Restrictions>: If your running unix, binding to port numbers
-below 1024 is only allowed by root.
-
-example: ('localport' => 6666, ...)
-
-=back
-
-=head1 METHODS
-
-=over 4
-
-=item set_handler($event, \&handler)
-
-Set a handler for an event. See B<EVENTS> further in this manual.
-
-=item start()
-
-Start main (infinite) event loop. Don't expect the program to return
-over execution after starting the B<start> method.
-
-B<Snippet>:
-
-$server->start()
-# NOT REACHED
-
-=item disconnect($client_filehandle)
-
-Disconnect a client_filehandle, envoking the $client_filehandle->close method
-and calling the 'client_disconnected' method. It is very important for users
-to understand that the server will never call this method on it's own.
-
-When users decide a client should go, this is the only proper way to
-disconnect it (removing it from the server's internal 'select' object).
-
-=back
-
-=head1 EVENTS
-
-A brief reference discription of the server's events. With 'loop_timeout'
-being the exception, all events will be called with one argument:
-
-($client_filehandle).
-
-Event handlers should B<*never*> block, or the server will (obviously, since
-we're under a single process model) deadlock for the duration of the execution
-misbehaving handler.
-
-=over 4
-
-=item 'loop_timeout' ()
-
-Define a handler for 'loop_timeout'. A time-based event called in repeated
-intervals of every 'loop_timeout' seconds. Useful when a server needs
-to wake up in an inconditional interval and get something done.
-
-Don't forget to assign supply a value for the 'loop_timeout' argument
-in the server's constructor method.
-
-=item 'client_input' ($client_filehandle)
-
-The select object decided a client has something to say, and handler
-should read from $client_filehandle and handle input.
-
-Note if input is null, client has most likely disconnected and
-$server->disconnect should be invoked.
-
-=item 'client_connected' ($client_filehandle)
-
-Called when a new client connects, handler should handle
-the joyfull event, (print a banner, log connection).
-
-B<RETURN VALUE>: Return true if we keep the connection, false to drop it.
-
-=item 'client_disconnected' ($client_filehandle)
-
-Called (by the B<IO::Multiplex::disconnect> method) when a client disconnects.
-
-=back
+Called when a timer expires.
 
 =head1 AUTHOR
 
-Liraz Siri <liraz_siri@usa.net>, Ariel, Israel.
+Copyright 1999 Bruce J Keeler <bruce@gridpoint.com>
 
-=head1 COPYRIGHT
+Released under the terms of the Artistic License.
 
-Copyright 1999 (c) Liraz Siri <liraz_siri@usa.net>, Ariel, Israel,
-                   All rights reserved.
-
-=cut    
+=cut
