@@ -272,7 +272,7 @@ use Data::Dumper;
 use Tie::RefHash;
 use Carp qw(cluck);
     
-$VERSION = '0.01';
+$VERSION = '0.02';
 
 BEGIN {
     eval {
@@ -564,6 +564,7 @@ sub loop
                     # It's a server socket, so a new connection is
                     # waiting to be accepted
                     my $client = $fh->accept;
+                    next unless ($client);
                     $self->add($client);
                     $obj->mux_connection($self, $client)
                         if $obj && $obj->can("mux_connection");
@@ -765,6 +766,7 @@ sub close
     untie *$fh;
     close $fh;
     $obj->mux_close($self, $fh) if $obj && $obj->can("mux_close");
+    delete $self->{_fhs}{$fh};
 }    
 
 # We set non-blocking mode on all descriptors.  If we don't, then send

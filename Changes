@@ -3,3 +3,5 @@ Revision history for Perl extension IO::Multiplex.
 0.01  Fri Jul  2 10:39:23 1999
 	- original version; created by h2xs 1.19
 
+0.02  Wed Sep 22 15:44:28 PDT 1999
+	- Check for errors on accept
