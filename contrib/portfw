@@ -1,0 +1,228 @@
+#!/usr/bin/perl -w
+
+=pod
+
+=head1 NAME
+
+portfw - Port forwarder
+
+=head1 SYNOPSYS
+
+portfw [-p pidfile] [local_ip:]local_port[/proto] remote_ip[:remote_port]
+
+=head1 DESCRIPTION
+
+Forwards all incoming request from local_port to remote_port.  If
+local_ip is not specified, all addresses on all interfaces are used.
+If no remote_port is specified, then the same local_port is assumed
+as the default.  If no /proto is specified, tcp is assumed.
+
+=head1 AUTHOR
+
+Rob Brown - bbb@cpan.org
+
+=cut
+
+use strict;
+use Getopt::Long;
+use IO::Multiplex;
+use IO::Socket;
+
+my $pidfile;
+GetOptions
+  "pidfile=s" => \$pidfile,
+  ;
+
+my ($local_addr,$remote_addr)=@ARGV;
+die "Missing local port\n" if !$local_addr;
+die "Missing remote ip\n" if !$remote_addr;
+
+my ($local_ip, $local_port, $proto,
+    $remote_ip,$remote_port);
+if ($local_addr =~ s%/(\w+)$%%) {
+  $proto = $1;
+} else {
+  $proto = "tcp";
+}
+if ($local_addr =~ s%^([\d\.]+):%%) {
+  $local_ip = $1;
+} else {
+  $local_ip = "0.0.0.0";
+}
+if ($local_addr =~ m%^(\d+)$%) {
+  $local_port = $1;
+} else {
+  die "Invalid local port [$local_addr]\n";
+}
+if ($remote_addr =~ s%:(\d+)$%%) {
+  $remote_port = $1;
+} else {
+  $remote_port = $local_port;
+}
+if ($remote_addr =~ m%^([\d\.]+)$%) {
+  $remote_ip = $1;
+} else {
+  die "Invalid remote ip [$remote_addr]\n";
+}
+
+print STDERR "Forwarding $proto packets from $local_ip:$local_port to $remote_ip:$remote_port\n";
+
+die "Unimplemented protocol $proto" unless $proto eq "tcp";
+
+my $listen = new IO::Socket::INET
+  LocalAddr => $local_ip,
+  LocalPort => $local_port,
+  Proto     => $proto,
+  Listen    => 10,
+  ReuseAddr     => 1,
+  or die "Could not bind local port $local_port: $!";
+
+# Just test the remote connection once.
+new IO::Socket::INET
+  RemoteAddr => $remote_ip,
+  RemotePort => $remote_port,
+  Proto      => $proto,
+  or die "Could not connect to remote $remote_ip:$remote_port: $!";
+
+if (my $pid = fork) {
+  if ($pidfile) {
+    open (PID, ">$pidfile");
+    print PID "$pid\n";
+    close PID;
+  }
+  exit;
+} elsif (defined $pid) {
+  open STDIN,  "</dev/null";
+  open STDOUT, ">/dev/null";
+  open STDERR, ">/dev/null";
+} else {
+  die "fork: $!\n";
+}
+
+my $mux = new IO::Multiplex;
+$mux->set_callback_object("My::Portfw");
+$mux->listen($listen);
+$mux->loop;
+# Never reaches here
+exit 1;
+
+package My::Portfw;
+our %complement = ();
+
+sub mux_connection {
+  my $self = shift;
+  my $mux = shift;
+  my $fh = shift;
+  my $remote_client = new IO::Socket::INET
+    PeerAddr => $remote_ip,
+    PeerPort => $remote_port,
+    Proto    => $proto;
+  if (!$remote_client) {
+    warn "FAILED!\n";
+    # Remote connection failed
+    $fh->write("Server Down! $!\n");
+    $fh->close;
+    return;
+  }
+  $mux->add($remote_client);
+  $complement{"$fh"} = $remote_client;
+  $complement{"$remote_client"} = $fh;
+  return 1;
+}
+
+sub mux_input {
+  my $self = shift;
+  my $mux  = shift;
+  my $fh   = shift;
+  my $data = shift;
+  if (my $proxy = $complement{"$fh"}) {
+    # Consume the packet by sending to its complement socket.
+    $proxy->write($$data);
+    $$data = "";
+  } else {
+    # Not sure what to do, close it.
+    $$data = "";
+    $fh->close;
+  }
+}
+
+sub mux_eof {
+  my $self = shift;
+  my $mux  = shift;
+  my $fh   = shift;
+  my $data = shift;
+  if (my $proxy = $complement{"$fh"}) {
+    delete $complement{"$fh"};
+    delete $complement{"$proxy"};
+    # Consume the packet by sending to its complement socket.
+    $proxy->write($$data);
+    $$data = "";
+    # If this is closing, then close the complement too.
+    $proxy->close;
+  }
+}
+
+exit 1;
+__END__
+
+# Routine: socket_string
+# Precond: Takes a socket handle $socket
+# Purpose: Show IP:PORT of socket endpoint in human readable form
+
+sub socket_string {
+  my ($socket)=@_;
+  if (length $socket != 16) {
+    my ($package, $file, $line, $sub, $hasargs, $wantarray) = caller(0);
+    print STDERR "WHOA! I saved a dangerous argument from sockaddr_in! FILE: $file, LINE: $line, ARG=[$socket]\n";
+    return "[BrokenSocket]";
+  }
+  my ($port,$addr) = sockaddr_in($socket);
+  return "[".(join(".",unpack("C4",$addr))).":$port]";
+}
+
+sub usage {
+  my ($p);
+  ($p)=$0=~m%([^/]+)$%;
+  print <<USAGE;
+
+Usage>
+
+  $p <configuration_file> [<pidfile>]
+
+  Configuration File Directives:
+
+  # Comments are preceeded with a pound symbol.
+  # Blank lines are also ignored.
+
+  Allow <IP_Address>[/<Range>]
+  Let remote clients connect to the forwarder.
+  Example:
+  Allow 10.9.8.0/8
+
+  Deny <IP_Address>[/<Range>]
+  Prevent remote clients from connecting.  Overrides Allow settings.
+  Example:
+  Deny 10.11.0.0/16
+
+  If neither Allow and Deny settings are specified, all
+  remote clients are allowed to use the forwarder.
+
+  TCP [<src_address>] <src_port> <dest_address> <dest_port>
+  Address may be either the dotted IP notation or a resolvable hostname.
+  src_address may be "*" to denote all interfaces,
+  which is the defaut if not supplied.
+  Listens on the source port using tcp protocol and forwards to the destination port.
+  Example:
+  TCP 10.1.2.3 80 10.1.2.4 8080
+
+  UDP [<src_address>] <src_port> <dest_address> <dest_port>
+  Address may be either the dotted IP notation or a resolvable hostname.
+  src_address may be "*" to denote all interfaces,
+  which is the defaut if not supplied.
+  Accepts udp packets on the source port and forwards them to the destination port.
+  Example:
+  UDP 10.1.2.3 80 10.1.2.4 8080
+
+USAGE
+  exit 1;
+}

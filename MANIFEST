@@ -4,6 +4,7 @@ TODO
 MANIFEST
 Makefile.PL
 lib/IO/Multiplex.pm
+contrib/portfw
 IO-Multiplex.spec
 IO-Multiplex.spec.PL
 t/100_load.t

@@ -270,7 +270,7 @@ use IO::Handle;
 use Fcntl;
 use Carp qw(carp);
 
-$VERSION = '1.05';
+$VERSION = '1.06';
 
 BEGIN {
     eval {
