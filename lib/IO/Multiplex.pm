@@ -270,7 +270,7 @@ use IO::Handle;
 use Fcntl;
 use Carp qw(carp);
 
-$VERSION = '1.07';
+$VERSION = '1.08';
 
 BEGIN {
     eval {
@@ -301,7 +301,7 @@ sub new
                        _timerkeys   => {},
                        _timers      => [],
                        _listen      => {}  } => $package;
-    $self;
+    return $self;
 }
 
 =head2 listen
@@ -324,7 +324,7 @@ sub listen
     my $fh   = shift;
 
     $self->add($fh);
-    $self->{_fhs}{$fh}{listen} = 1;
+    $self->{_fhs}{"$fh"}{listen} = 1;
 }
 
 =head2 add
@@ -343,19 +343,19 @@ sub add
     my $self = shift;
     my $fh   = shift;
 
-    return if $self->{_fhs}{$fh};
+    return if $self->{_fhs}{"$fh"};
 
     nonblock($fh);
     autoflush($fh, 1);
     fd_set($self->{_readers}, $fh, 1);
-    $self->{_fhs}{$fh}{udp_true} =
+    $self->{_fhs}{"$fh"}{udp_true} =
         (SOCK_DGRAM == unpack("i", scalar getsockopt($fh,Socket::SOL_SOCKET(),Socket::SO_TYPE())));
-    $self->{_fhs}{$fh}{inbuffer} = '';
-    $self->{_fhs}{$fh}{outbuffer} = '';
-    $self->{_fhs}{$fh}{fileno} = fileno($fh);
-    $self->{_handles}{$fh} = $fh;
+    $self->{_fhs}{"$fh"}{inbuffer} = '';
+    $self->{_fhs}{"$fh"}{outbuffer} = '';
+    $self->{_fhs}{"$fh"}{fileno} = fileno($fh);
+    $self->{_handles}{"$fh"} = $fh;
     tie *$fh, "IO::Multiplex::Handle", $self, $fh;
-    $fh;
+    return $fh;
 }
 
 =head2 remove
@@ -374,8 +374,8 @@ sub remove
     my $fh   = shift;
     fd_set($self->{_writers}, $fh, 0);
     fd_set($self->{_readers}, $fh, 0);
-    delete $self->{_fhs}{$fh};
-    delete $self->{_handles}{$fh};
+    delete $self->{_fhs}{"$fh"};
+    delete $self->{_handles}{"$fh"};
     $self->_removeTimer($fh);
     untie *$fh;
 }
@@ -407,12 +407,12 @@ sub set_callback_object
     my $self = shift;
     my $obj  = shift;
     my $fh   = shift;
-    return if $fh && !exists($self->{_fhs}{$fh});
+    return if $fh && !exists($self->{_fhs}{"$fh"});
 
-    my $old  = $fh ? $self->{_fhs}{$fh}{object} : $self->{_object};
+    my $old  = $fh ? $self->{_fhs}{"$fh"}{object} : $self->{_object};
 
-    $fh ? $self->{_fhs}{$fh}{object} : $self->{_object} = $obj;
-    $old;
+    $fh ? $self->{_fhs}{"$fh"}{object} : $self->{_object} = $obj;
+    return $old;
 }
 
 =head2 kill_output
@@ -427,9 +427,9 @@ sub kill_output
 {
     my $self = shift;
     my $fh   = shift;
-    return unless $fh && exists($self->{_fhs}{$fh});
+    return unless $fh && exists($self->{_fhs}{"$fh"});
 
-    $self->{_fhs}{$fh}{outbuffer} = '';
+    $self->{_fhs}{"$fh"}{outbuffer} = '';
     fd_set($self->{_writers}, $fh, 0);
 }
 
@@ -446,14 +446,14 @@ sub outbuffer
 {
     my $self = shift;
     my $fh   = shift;
-    return unless $fh && exists($self->{_fhs}{$fh});
+    return unless $fh && exists($self->{_fhs}{"$fh"});
 
     if (@_) {
-        $self->{_fhs}{$fh}{outbuffer} = $_[0] if @_;
+        $self->{_fhs}{"$fh"}{outbuffer} = $_[0] if @_;
         fd_set($self->{_writers}, $fh, 0) if !$_[0];
     }
 
-    $self->{_fhs}{$fh}{outbuffer};
+    return $self->{_fhs}{"$fh"}{outbuffer};
 }
 
 =head2 inbuffer
@@ -469,13 +469,13 @@ sub inbuffer
 {
     my $self = shift;
     my $fh   = shift;
-    return unless $fh && exists($self->{_fhs}{$fh});
+    return unless $fh && exists($self->{_fhs}{"$fh"});
 
     if (@_) {
-        $self->{_fhs}{$fh}{inbuffer} = $_[0] if @_;
+        $self->{_fhs}{"$fh"}{inbuffer} = $_[0] if @_;
     }
 
-    $self->{_fhs}{$fh}{inbuffer};
+    return $self->{_fhs}{"$fh"}{inbuffer};
 }
 
 =head2 set_timeout
@@ -499,7 +499,7 @@ sub set_timeout
     my $self     = shift;
     my $fh       = shift;
     my $timeout  = shift;
-    return unless $fh && exists($self->{_fhs}{$fh});
+    return unless $fh && exists($self->{_fhs}{"$fh"});
 
     if (defined $timeout) {
         $self->_addTimer($fh, $timeout + time);
@@ -521,7 +521,7 @@ sub handles
 {
     my $self = shift;
 
-    grep(!$self->{_fhs}{$_}{listen}, values %{$self->{_handles}});
+    return grep(!$self->{_fhs}{"$_"}{listen}, values %{$self->{_handles}});
 }
 
 sub _addTimer {
@@ -531,7 +531,7 @@ sub _addTimer {
 
     # Set a key so that we can quickly tell if a given $fh has
     # a timer set
-    $self->{_timerkeys}{$fh} = 1;
+    $self->{_timerkeys}{"$fh"} = 1;
 
     # Store the timeout in an array, and resort it
     @{$self->{_timers}} = sort { $a->[1] <=> $b->[1] } (@{$self->{_timers}}, [ $fh, $time ] );
@@ -542,13 +542,13 @@ sub _removeTimer {
     my $fh   = shift;
 
     # Return quickly if no timer is set
-    return unless exists $self->{_timerkeys}{$fh};
+    return unless exists $self->{_timerkeys}{"$fh"};
 
     # Remove the timeout from the sorted array
     @{$self->{_timers}} = grep { $_->[0] ne $fh } @{$self->{_timers}};
 
     # Get rid of the key
-    delete $self->{_timerkeys}{$fh};
+    delete $self->{_timerkeys}{"$fh"};
 }
 
 
@@ -595,16 +595,16 @@ sub loop
             # Avoid creating a permanent empty hash ref for "$fh"
             # by attempting to access its {object} element
             # if it has already been closed.
-            next unless exists $self->{_fhs}{$fh};
+            next unless exists $self->{_fhs}{"$fh"};
 
             # Get the callback object.
-            my $obj = $self->{_fhs}{$fh}{object} ||
+            my $obj = $self->{_fhs}{"$fh"}{object} ||
                 $self->{_object};
 
             # Is this descriptor ready for reading?
             if (fd_isset($rdready, $fh))
             {
-                if ($self->{_fhs}{$fh}{listen}) {
+                if ($self->{_fhs}{"$fh"}{listen}) {
                     # It's a server socket, so a new connection is
                     # waiting to be accepted
                     my $client = $fh->accept;
@@ -617,7 +617,7 @@ sub loop
                         $rv = recv($fh, $data, BUFSIZ, 0);
                         if (defined $rv) {
                             # Remember where the last UDP packet came from
-                            $self->{_fhs}{$fh}{udp_peer} = $rv;
+                            $self->{_fhs}{"$fh"}{udp_peer} = $rv;
                         }
                     } else {
                         $rv = &POSIX::read(fileno($fh), $data, BUFSIZ);
@@ -627,9 +627,9 @@ sub loop
                         # Append the data to the client's receive buffer,
                         # and call process_input to see if anything needs to
                         # be done.
-                        $self->{_fhs}{$fh}{inbuffer} .= $data;
+                        $self->{_fhs}{"$fh"}{inbuffer} .= $data;
                         $obj->mux_input($self, $fh,
-                                        \$self->{_fhs}{$fh}{inbuffer})
+                                        \$self->{_fhs}{"$fh"}{inbuffer})
                             if $obj && $obj->can("mux_input");
                     } else {
                         unless (defined $rv) {
@@ -650,61 +650,65 @@ sub loop
                         # it.
                         fd_set($self->{_readers}, $fh, 0);
                         $obj->mux_eof($self, $fh,
-                                      \$self->{_fhs}{$fh}{inbuffer})
+                                      \$self->{_fhs}{"$fh"}{inbuffer})
                             if $obj && $obj->can("mux_eof");
 
-                        if (exists $self->{_fhs}{$fh}) {
-                            delete $self->{_fhs}{$fh}{inbuffer};
+                        if (exists $self->{_fhs}{"$fh"}) {
+                            delete $self->{_fhs}{"$fh"}{inbuffer};
                             # The mux_eof handler could have responded
                             # with a shutdown for writing.
                             $self->close($fh)
-                                unless exists $self->{_fhs}{$fh} &&
-                                    exists $self->{_fhs}{$fh}{outbuffer};
+                                unless exists $self->{_fhs}{"$fh"} &&
+                                    exists $self->{_fhs}{"$fh"}{outbuffer};
                         }
                         next;
                     }
                 }
             }  # end if readable
-            next unless exists $self->{_fhs}{$fh};
+            next unless exists $self->{_fhs}{"$fh"};
 
             if (fd_isset($wrready, $fh)) {
-                unless ($self->{_fhs}{$fh}{outbuffer}) {
+                unless ($self->{_fhs}{"$fh"}{outbuffer}) {
                     fd_set($self->{_writers}, $fh, 0);
                     $obj->mux_outbuffer_empty($self, $fh)
                         if ($obj && $obj->can("mux_outbuffer_empty"));
                     next;
                 }
                 $rv = &POSIX::write(fileno($fh),
-                                    $self->{_fhs}{$fh}{outbuffer},
-                                    length($self->{_fhs}{$fh}{outbuffer}));
+                                    $self->{_fhs}{"$fh"}{outbuffer},
+                                    length($self->{_fhs}{"$fh"}{outbuffer}));
                 unless (defined($rv)) {
                     # We got an error writing to it.  If it's
                     # EWOULDBLOCK (shouldn't happen if select told us
                     # we can write) or EAGAIN, or EINTR we don't worry
                     # about it.  otherwise, close it down.
-
                     unless ($! == EWOULDBLOCK ||
                             $! == EINTR ||
                             $! == EAGAIN) {
-                        warn "IO::Multiplex: write error: $!\n";
+                        if ($! == EPIPE) {
+                            $obj->mux_epipe($self, $fh)
+                                if $obj && $obj->can("mux_epipe");
+                        } else {
+                            warn "IO::Multiplex: write error: $!\n";
+                        }
                         $self->close($fh);
                     }
                     next;
                 }
-                substr($self->{_fhs}{$fh}{outbuffer}, 0, $rv) = '';
-                unless ($self->{_fhs}{$fh}{outbuffer}) {
+                substr($self->{_fhs}{"$fh"}{outbuffer}, 0, $rv) = '';
+                unless ($self->{_fhs}{"$fh"}{outbuffer}) {
                     # Mark us as not writable if there's nothing more to
                     # write
                     fd_set($self->{_writers}, $fh, 0);
                     $obj->mux_outbuffer_empty($self, $fh)
                         if ($obj && $obj->can("mux_outbuffer_empty"));
 
-                    if ($self->{_fhs}{$fh}{shutdown}) {
+                    if ($self->{_fhs}{"$fh"}{shutdown}) {
                         # If we've been marked for shutdown after write
                         # do it.
                         shutdown($fh, 1);
-                        delete $self->{_fhs}{$fh}{outbuffer};
-                        unless (exists $self->{_fhs}{$fh}{inbuffer}) {
+                        delete $self->{_fhs}{"$fh"}{outbuffer};
+                        unless (exists $self->{_fhs}{"$fh"}{inbuffer}) {
                             # We'd previously been shutdown for reading
                             # also, so close out completely
                             $self->close($fh);
@@ -714,7 +718,7 @@ sub loop
                 }
             }  # End if writeable
 
-            next unless exists $self->{_fhs}{$fh};
+            next unless exists $self->{_fhs}{"$fh"};
 
         }  # End foreach $fh (...)
 
@@ -745,9 +749,9 @@ sub _checkTimeouts {
         my $fh = $timer->[0];
         $self->_removeTimer($fh);
 
-        next unless exists $self->{_fhs}{$fh};
+        next unless exists $self->{_fhs}{"$fh"};
 
-        my $obj = $self->{_fhs}{$fh}{object} || $self->{_object};
+        my $obj = $self->{_fhs}{"$fh"}{object} || $self->{_object};
         $obj->mux_timeout($self, $fh) if $obj && $obj->can("mux_timeout");
     }
 }
@@ -779,7 +783,7 @@ Get peer endpoint of where the last udp packet originated.
 sub udp_peer {
   my $self = shift;
   my $fh = shift;
-  return $self->{_fhs}{$fh}{udp_peer};
+  return $self->{_fhs}{"$fh"}{udp_peer};
 }
 
 =head2 is_udp
@@ -794,7 +798,7 @@ This method will tell if a file handle is of type UDP.
 sub is_udp {
   my $self = shift;
   my $fh = shift;
-  return $self->{_fhs}{$fh}{udp_true};
+  return $self->{_fhs}{"$fh"}{udp_true};
 }
 
 =head2 write
@@ -810,9 +814,9 @@ sub write
     my $self = shift;
     my $fh   = shift;
     my $data = shift;
-    return unless $fh && exists($self->{_fhs}{$fh});
+    return unless $fh && exists($self->{_fhs}{"$fh"});
 
-    if ($self->{_fhs}{$fh}{shutdown}) {
+    if ($self->{_fhs}{"$fh"}{shutdown}) {
         $! = EPIPE;
         return undef;
     }
@@ -827,9 +831,9 @@ sub write
             return send($fh, $data, 0);
         }
     }
-    $self->{_fhs}{$fh}{outbuffer} .= $data;
+    $self->{_fhs}{"$fh"}{outbuffer} .= $data;
     fd_set($self->{_writers}, $fh, 1);
-    length($data);
+    return length($data);
 }
 
 =head2 shutdown
@@ -850,7 +854,7 @@ sub shutdown
     my $self = shift;
     my $fh = shift;
     my $which = shift;
-    return unless $fh && exists($self->{_fhs}{$fh});
+    return unless $fh && exists($self->{_fhs}{"$fh"});
 
     if ($which == 0 || $which == 2) {
         # Shutdown for reading.  We can do this now.
@@ -863,16 +867,16 @@ sub shutdown
     if ($which == 1 || $which == 2) {
         # Shutdown for writing.  Only do this now if there is no pending
         # data.
-        if ($self->{_fhs}{$fh}{outbuffer}) {
-            $self->{_fhs}{$fh}{shutdown} = 1;
+        if ($self->{_fhs}{"$fh"}{outbuffer}) {
+            $self->{_fhs}{"$fh"}{shutdown} = 1;
         } else {
             shutdown($fh, 1);
-            delete $self->{_fhs}{$fh}{outbuffer};
+            delete $self->{_fhs}{"$fh"}{outbuffer};
         }
     }
     # Delete the descriptor if it's totally gone.
-    unless (exists $self->{_fhs}{$fh}{inbuffer} ||
-            exists $self->{_fhs}{$fh}{outbuffer}) {
+    unless (exists $self->{_fhs}{"$fh"}{inbuffer} ||
+            exists $self->{_fhs}{"$fh"}{outbuffer}) {
         $self->close($fh);
     }
 }
@@ -890,17 +894,17 @@ sub close
 {
     my $self = shift;
     my $fh = shift;
-    return unless exists $self->{_fhs}{$fh};
+    return unless exists $self->{_fhs}{"$fh"};
 
-    my $obj = $self->{_fhs}{$fh}{object} || $self->{_object};
-    warn "closeing with read buffer" if $self->{_fhs}{$fh}{inbuffer};
-    warn "closeing with write buffer" if $self->{_fhs}{$fh}{outbuffer};
+    my $obj = $self->{_fhs}{"$fh"}{object} || $self->{_object};
+    warn "closeing with read buffer" if $self->{_fhs}{"$fh"}{inbuffer};
+    warn "closeing with write buffer" if $self->{_fhs}{"$fh"}{outbuffer};
 
     fd_set($self->{_readers}, $fh, 0);
     fd_set($self->{_writers}, $fh, 0);
 
-    delete $self->{_fhs}{$fh};
-    delete $self->{_handles}{$fh};
+    delete $self->{_fhs}{"$fh"};
+    delete $self->{_handles}{"$fh"};
     untie *$fh;
     close $fh;
     $obj->mux_close($self, $fh) if $obj && $obj->can("mux_close");
@@ -927,7 +931,7 @@ sub fd_set
 
 sub fd_isset
 {
-    vec($_[0], fileno($_[1]), 1);
+    return vec($_[0], fileno($_[1]), 1);
 }
 
 # We tie handles into this package to handle write buffering.
@@ -943,7 +947,7 @@ use vars qw(@ISA);
 sub FILENO
 {
     my $self = shift;
-    return ($self->{_mux}->{_fhs}->{$self->{_fh}}->{fileno});
+    return ($self->{_mux}->{_fhs}->{"$self->{_fh}"}->{fileno});
 }
 
 
@@ -954,7 +958,8 @@ sub TIEHANDLE
     my $fh  = shift;
 
     my $self = bless { _mux   => $mux,
-                       _fh    => $fh }
+                       _fh    => $fh } => $package;
+    return $self;
 }
 
 sub WRITE
@@ -962,13 +967,13 @@ sub WRITE
     my $self = shift;
     my ($msg, $len, $offset) = @_;
     $offset ||= 0;
-    $self->{_mux}->write($self->{_fh}, substr($msg, $offset, $len));
+    return $self->{_mux}->write($self->{_fh}, substr($msg, $offset, $len));
 }
 
 sub CLOSE
 {
     my $self = shift;
-    $self->{_mux}->shutdown($self->{_fh}, 2);
+    return $self->{_mux}->shutdown($self->{_fh}, 2);
 }
 
 sub READ

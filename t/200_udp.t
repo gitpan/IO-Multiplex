@@ -18,7 +18,7 @@ use strict;
 use Test;
 use IO::Socket;
 use IO::Multiplex;
-use POSIX qw(ENOTCONN);
+use POSIX qw(ENOTCONN EDESTADDRREQ);
 
 $| = 1;
 plan tests => 15;
@@ -103,7 +103,8 @@ sub Pitcher::mux_timeout {
     # when trying to send() a packet.
     $! = 0;
     print $fh $msg2;
-    ok ($! == ENOTCONN) || warn "DEBUG: bang = [$!](".($!+0).")";
+    ok ($! == ENOTCONN || $! == EDESTADDRREQ)
+      or warn "DEBUG: bang = [$!](".($!+0).")";
 
     # Grab the real peer destination.
     ok my $saddr = $mux->{_fhs}{$sock2}{udp_peer};

@@ -21,7 +21,7 @@ as the default.  If no /proto is specified, tcp is assumed.
 
 Rob Brown - bbb@cpan.org
 
-$Id: portfw,v 1.6 2003/07/30 06:38:03 rob Exp $
+$Id: portfw,v 1.7 2003/07/30 06:50:26 rob Exp $
 
 =cut
 

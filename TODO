@@ -8,7 +8,6 @@ Make it work with SSL sockets (difficult)
 Benchmarking stats.
 More optimizations.
 More examples.
-Provide a portforwarder example that does TCP and UDP.
 Feature to let output buffer to switch to a file
   after certain limits in order to save memory
   and extend the buffer size.
