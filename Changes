@@ -28,3 +28,11 @@ Revision history for Perl extension IO::Multiplex.
 
 1.00  Wed Feb 23 12:07:07 PST 2000
 	- Stable enough now.  Call it a release.
+
+1.01  Wed Oct 17 13:00:00 MDT 2001
+	- The following by Rob Brown <rob@roobik.com>
+	- Ported to work with Perl 5.6.0
+	- Added optional code ref for loop
+	- Added tie FILENO method
+	- Fixed tie CLOSE and shutdown to flush both
+          input {inbuffer} and output {outbuffer} correctly

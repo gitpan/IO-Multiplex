@@ -115,7 +115,7 @@ server, but it does OK against the sample server presented further down.
     $mux->add(\*STDIN);
     # We want to buffer output to the terminal.  This prevents the program
     # from blocking if the user hits CTRL-S for example.
-    $mux->add(\*STDOUT);  
+    $mux->add(\*STDOUT);
 
     # We're not object oriented, so just request callbacks to the
     # current package
@@ -155,12 +155,12 @@ Servers are just as simple to write.  We just register a listen socket
 with the multiplex object C<listen> method.  It will automatically
 accept connections on it and add them to its list of active file handles.
 
-This example is a simple chat server.  
+This example is a simple chat server.
 
     use IO::Socket;
     use IO::Multiplex;
     use Tie::RefHash;
-    
+
     my $mux  = new IO::Multiplex;
 
     # Create a listening socket
@@ -171,10 +171,10 @@ This example is a simple chat server.
 
     # We use the listen method instead of the add method.
     $mux->listen($sock);
-    
+
     $mux->set_callback_object(__PACKAGE__);
     $mux->loop;
-    
+
     sub mux_input {
         my $package = shift;
         my $mux     = shift;
@@ -241,7 +241,7 @@ have a Player object for each player.
             $self->process_command($1);
         }
     }
-    
+
     sub mux_close {
        my $self = shift;
 
@@ -253,7 +253,7 @@ have a Player object for each player.
     sub mux_timeout {
         my $self = shift;
         my $mux  = shift;
-        
+
         $self->heartbeat;
         $mux->set_timeout($self->{fh}, 1);
     }
@@ -271,8 +271,8 @@ use Fcntl;
 use Data::Dumper;
 use Tie::RefHash;
 use Carp qw(cluck);
-    
-$VERSION = '1.00';
+
+$VERSION = '1.01';
 
 BEGIN {
     eval {
@@ -322,7 +322,7 @@ sub listen
 {
     my $self = shift;
     my $fh   = shift;
-    
+
     $self->add($fh);
     $self->{_fhs}{$fh}{listen} = 1;
 }
@@ -344,7 +344,7 @@ sub add
     my $fh   = shift;
 
     return if $self->{_fhs}{$fh};
-    
+
     nonblock($fh);
     autoflush($fh, 1);
     fd_set($self->{_readers}, $fh, 1);
@@ -353,7 +353,7 @@ sub add
     $self->{_fhs}{$fh}{fileno} = fileno($fh);
     tie *$fh, "MVModule::MVmux::Handle", $self, $fh;
     $fh;
-}    
+}
 
 =head2 remove
 
@@ -403,7 +403,7 @@ sub set_callback_object
     my $obj  = shift;
     my $fh   = shift;
     return if $fh && !exists($self->{_fhs}{$fh});
-                             
+
     my $old  = $fh ? $self->{_fhs}{$fh}{object} : $self->{_object};
 
     $fh ? $self->{_fhs}{$fh}{object} : $self->{_object} = $obj;
@@ -530,6 +530,7 @@ Enter the main loop and start processing IO events.
 sub loop
 {
     my $self = shift;
+    my $heartbeat = shift;
     $self->{_endloop} = 0;
 
     while (!$self->{_endloop} && keys %{$self->{_fhs}}) {
@@ -538,14 +539,14 @@ sub loop
         my $rdready;
         my $wrready;
         my $timeout = undef;
-        
+
         my @timeouts = sort { $a <=> $b } map {
             defined $_->{timeout} ? $_->{timeout} : ()
         } values %{$self->{_fhs}};
         if (@timeouts) {
             $timeout = $timeouts[0] - time;
         }
-        
+
         my $numready = select($rdready=$self->{_readers},
                               $wrready=$self->{_writers},
                               undef,
@@ -558,6 +559,8 @@ sub loop
                 last;
             }
         }
+        &{ $heartbeat } ($rdready, $wrready) if $heartbeat;
+
         foreach my $fh (keys %{$self->{_fhs}}) {
             # Get the callback object.
             my $obj = $self->{_fhs}{$fh}{object} ||
@@ -597,7 +600,7 @@ sub loop
                         # the connection open so it can be sent.  If
                         # the other end is closed for writing, the
                         # send will error and we close down there.
-                        # Either way, we remove it from $readers as
+                        # Either way, we remove it from _readers as
                         # we're no longer interested in reading from
                         # it.
                         fd_set($self->{_readers}, $fh, 0);
@@ -611,14 +614,14 @@ sub loop
                             # with a shutdown for writing.
                             $self->close($fh)
                                 unless exists $self->{_fhs}{$fh} &&
-                                    exists$self->{_fhs}{$fh}{outbuffer};
+                                    exists $self->{_fhs}{$fh}{outbuffer};
                         }
                         next;
                     }
                 }
             }  # end if readable
             next unless exists $self->{_fhs}{$fh};
-            
+
             if (fd_isset($wrready, $fh)) {
                 unless ($self->{_fhs}{$fh}{outbuffer}) {  # Shouldn't happen
                     fd_set($self->{_writers}, $fh, 0);
@@ -634,7 +637,7 @@ sub loop
                     # EWOULDBLOCK (shouldn't happen if select told us
                     # we can write) or EAGAIN, or EINTR we don't worry
                     # about it.  otherwise, close it down.
-                    
+
                     unless ($! == EWOULDBLOCK ||
                             $! == EINTR ||
                             $! == EAGAIN) {
@@ -675,7 +678,7 @@ sub loop
                 $self->{_fhs}{$fh}{timeout} = undef;
                 $obj->mux_timeout($self, $fh);
             }
-                
+
         }  # End foreach $fh (...)
     } # End while(loop)
 }
@@ -738,14 +741,15 @@ sub shutdown
     my $fh = shift;
     my $which = shift;
     return unless $fh && exists($self->{_fhs}{$fh});
-    
+
     if ($which == 0 || $which == 2) {
         # Shutdown for reading.  We can do this now.
         shutdown($fh, 0);
-        fd_set($self->{_readers}, $fh, 0);
-        delete $self->{_fhs}{$fh}{inbuffer};
+        # The mux_eof hook must be run from the main loop to consume
+        # the rest of the inbuffer if there is anything left.
+        # It will also remove $fh from _readers.
     }
-    
+
     if ($which == 1 || $which == 2) {
         # Shutdown for writing.  Only do this now if there is no pending
         # data.
@@ -777,20 +781,20 @@ sub close
     my $self = shift;
     my $fh = shift;
     return unless exists $self->{_fhs}{$fh};
-    
+
     my $obj = $self->{_fhs}{$fh}{object} || $self->{_object};
     warn "closeing with read buffer" if $self->{_fhs}{$fh}{inbuffer};
     warn "closeing with write buffer" if $self->{_fhs}{$fh}{outbuffer};
 
-    vec($self->{_readers}, $self->{_fhs}{$fh}{fileno}, 1) = 0;
-    vec($self->{_writers}, $self->{_fhs}{$fh}{fileno}, 1) = 0;
-    
+    fd_set($self->{_readers}, $fh, 0);
+    fd_set($self->{_writers}, $fh, 0);
+
     delete $self->{_fhs}{$fh};
     untie *$fh;
     close $fh;
     $obj->mux_close($self, $fh) if $obj && $obj->can("mux_close");
     delete $self->{_fhs}{$fh};
-}    
+}
 
 # We set non-blocking mode on all descriptors.  If we don't, then send
 # might block if the data is larger than the kernel can accept all at once,
@@ -826,12 +830,19 @@ use Carp;
 use vars qw(@ISA);
 @ISA = qw(Tie::Handle);
 
+sub FILENO
+{
+    my $self = shift;
+    return ($self->{_mux}->{_fhs}->{$self->{_fh}}->{fileno});
+}
+
+
 sub TIEHANDLE
 {
     my $package = shift;
     my $mux = shift;
     my $fh  = shift;
-    
+
     my $self = bless { _mux   => $mux,
                        _fh    => $fh }
 }
@@ -844,11 +855,10 @@ sub WRITE
     $self->{_mux}->write($self->{_fh}, substr($msg, $offset, $len));
 }
 
-# XXX This isn't quite right.
 sub CLOSE
 {
     my $self = shift;
-    $self->{_mux}->close($self->{_fh});
+    $self->{_mux}->shutdown($self->{_fh}, 2);
 }
 
 sub READ
@@ -895,7 +905,7 @@ leave any partially received data in the buffer.
 
         # Process each line in the input, leaving partial lines
         # in the input buffer
-        while ($$input =~ s/^(.*?\n)//) {
+        while ($$data =~ s/^(.*?\n)//) {
             $self->process_command($1);
         }
     }
@@ -906,7 +916,8 @@ This is called when an end-of-file condition is present on the descriptor.
 This is does not nessecarily mean that the descriptor has been closed, as
 the other end of a socket could have used C<shutdown> to close just half
 of the socket, leaving us free to write data back down the still open
-half.
+half.  Like mux_input, it is also passed a reference to the input buffer.
+It should consume the entire buffer or else it will just be lost.
 
 In this example, we send a final reply to the other end of the socket,
 and then shut it down for writing.  Since it is also shut down for reading
