@@ -21,6 +21,8 @@ as the default.  If no /proto is specified, tcp is assumed.
 
 Rob Brown - bbb@cpan.org
 
+$Id: portfw,v 1.6 2003/07/30 06:38:03 rob Exp $
+
 =cut
 
 use strict;
@@ -67,47 +69,69 @@ if ($remote_addr =~ m%^([\d\.]+)$%) {
 
 print STDERR "Forwarding $proto packets from $local_ip:$local_port to $remote_ip:$remote_port\n";
 
-die "Unimplemented protocol $proto" unless $proto eq "tcp";
-
+# Get ready to receive an incoming connection
 my $listen = new IO::Socket::INET
   LocalAddr => $local_ip,
   LocalPort => $local_port,
   Proto     => $proto,
-  Listen    => 10,
-  ReuseAddr     => 1,
-  or die "Could not bind local port $local_port: $!";
+  ReuseAddr => 1,
+  $proto eq "tcp"?(Listen => 10):(),
+  or die "Could not bind local port $local_port/$proto: $!";
 
 # Just test the remote connection once.
-new IO::Socket::INET
-  RemoteAddr => $remote_ip,
-  RemotePort => $remote_port,
-  Proto      => $proto,
-  or die "Could not connect to remote $remote_ip:$remote_port: $!";
+my $remote_connect = new IO::Socket::INET
+  PeerAddr => $remote_ip,
+  PeerPort => $remote_port,
+  Proto    => $proto,
+  or die "Could not connect to remote $remote_ip:$remote_port/$proto: $!";
 
-if (my $pid = fork) {
-  if ($pidfile) {
-    open (PID, ">$pidfile");
+if ($proto eq "tcp") {
+  # Close the test tcp socket
+  $remote_connect->close;
+} elsif ($proto eq "udp") {
+  # Keep this around for udp replies
+} else {
+  die "Unimplemented protocol $proto\n";
+}
+
+if ($pidfile) {
+  if (my $pid = fork) {
+    open (PID, ">$pidfile") or die "WARNING: Cannot create $pidfile: $!\n";
     print PID "$pid\n";
     close PID;
+    exit;
+  } elsif (!defined $pid) {
+    die "fork: $!\n";
   }
-  exit;
-} elsif (defined $pid) {
-  open STDIN,  "</dev/null";
-  open STDOUT, ">/dev/null";
-  open STDERR, ">/dev/null";
+  $SIG{TERM} = sub {
+    unlink $pidfile;
+    exit;
+  };
 } else {
-  die "fork: $!\n";
+  exit if fork;
 }
+open STDIN,  "</dev/null";
+open STDOUT, ">/dev/null";
+open STDERR, ">/dev/null";
 
 my $mux = new IO::Multiplex;
 $mux->set_callback_object("My::Portfw");
-$mux->listen($listen);
+if ($proto eq "tcp") {
+  $mux->listen($listen);
+} elsif ($proto eq "udp") {
+  $My::Portfw::complement{"$listen"} = $remote_connect;
+  $My::Portfw::complement{"$remote_connect"} = $listen;
+  $mux->add($listen);
+  $mux->add($remote_connect);
+} else {
+  die "Unimplemented proto [$proto]";
+}
 $mux->loop;
 # Never reaches here
 exit 1;
 
 package My::Portfw;
-our %complement = ();
+use vars qw(%complement);
 
 sub mux_connection {
   my $self = shift;
@@ -152,77 +176,18 @@ sub mux_eof {
   my $fh   = shift;
   my $data = shift;
   if (my $proxy = $complement{"$fh"}) {
-    delete $complement{"$fh"};
-    delete $complement{"$proxy"};
     # Consume the packet by sending to its complement socket.
     $proxy->write($$data);
     $$data = "";
-    # If this is closing, then close the complement too.
-    $proxy->close;
+    # If this has been closed for writing,
+    # then close the complement for writing too.
+    $mux->shutdown($proxy, 1);
   }
 }
 
-exit 1;
-__END__
-
-# Routine: socket_string
-# Precond: Takes a socket handle $socket
-# Purpose: Show IP:PORT of socket endpoint in human readable form
-
-sub socket_string {
-  my ($socket)=@_;
-  if (length $socket != 16) {
-    my ($package, $file, $line, $sub, $hasargs, $wantarray) = caller(0);
-    print STDERR "WHOA! I saved a dangerous argument from sockaddr_in! FILE: $file, LINE: $line, ARG=[$socket]\n";
-    return "[BrokenSocket]";
-  }
-  my ($port,$addr) = sockaddr_in($socket);
-  return "[".(join(".",unpack("C4",$addr))).":$port]";
-}
-
-sub usage {
-  my ($p);
-  ($p)=$0=~m%([^/]+)$%;
-  print <<USAGE;
-
-Usage>
-
-  $p <configuration_file> [<pidfile>]
-
-  Configuration File Directives:
-
-  # Comments are preceeded with a pound symbol.
-  # Blank lines are also ignored.
-
-  Allow <IP_Address>[/<Range>]
-  Let remote clients connect to the forwarder.
-  Example:
-  Allow 10.9.8.0/8
-
-  Deny <IP_Address>[/<Range>]
-  Prevent remote clients from connecting.  Overrides Allow settings.
-  Example:
-  Deny 10.11.0.0/16
-
-  If neither Allow and Deny settings are specified, all
-  remote clients are allowed to use the forwarder.
-
-  TCP [<src_address>] <src_port> <dest_address> <dest_port>
-  Address may be either the dotted IP notation or a resolvable hostname.
-  src_address may be "*" to denote all interfaces,
-  which is the defaut if not supplied.
-  Listens on the source port using tcp protocol and forwards to the destination port.
-  Example:
-  TCP 10.1.2.3 80 10.1.2.4 8080
-
-  UDP [<src_address>] <src_port> <dest_address> <dest_port>
-  Address may be either the dotted IP notation or a resolvable hostname.
-  src_address may be "*" to denote all interfaces,
-  which is the defaut if not supplied.
-  Accepts udp packets on the source port and forwards them to the destination port.
-  Example:
-  UDP 10.1.2.3 80 10.1.2.4 8080
-
-USAGE
-  exit 1;
+sub mux_close {
+  my $self = shift;
+  my $mux  = shift;
+  my $fh   = shift;
+  delete $complement{"$fh"} if exists $complement{"$fh"};
 }

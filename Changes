@@ -1,5 +1,12 @@
 Revision history for Perl extension IO::Multiplex.
 
+1.07  Tue Jul 30 01:00:00 MDT 2003
+	- Handle certain eof conditions better.
+	  Spot by win@edx.de (Winfried Koenig)
+	- Fixed contrib/portfw to handle partly
+	  shutdown sockets more accurately.
+	- Add udp support to contrib/portfw.
+
 1.06  Mon Jul 28 14:45:00 MDT 2003
 	- Added contrib/portfw demo script.
 

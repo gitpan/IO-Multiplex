@@ -26,7 +26,7 @@ plan tests => 15;
 # Create a recv()ing socket.
 ok my $sock1 = new IO::Socket::INET
   LocalAddr => "127.0.0.1",
-  Proto => "udp"
+  Proto => "udp",
   or die $!;
 
 my $magic_port = $sock1->sockport;
@@ -35,7 +35,7 @@ my $magic_port = $sock1->sockport;
 ok my $sock2 = new IO::Socket::INET
   PeerAddr => "127.0.0.1",
   PeerPort => $magic_port,
-  Proto => "udp"
+  Proto => "udp",
   or die $!;
 
 # Create a generic unconnected socket for sendto()ing.
@@ -101,8 +101,9 @@ sub Pitcher::mux_timeout {
     ok 1;
     # Unconnected UDP socket should fail
     # when trying to send() a packet.
+    $! = 0;
     print $fh $msg2;
-    ok ($! == ENOTCONN);
+    ok ($! == ENOTCONN) || warn "DEBUG: bang = [$!](".($!+0).")";
 
     # Grab the real peer destination.
     ok my $saddr = $mux->{_fhs}{$sock2}{udp_peer};

@@ -270,7 +270,7 @@ use IO::Handle;
 use Fcntl;
 use Carp qw(carp);
 
-$VERSION = '1.06';
+$VERSION = '1.07';
 
 BEGIN {
     eval {
@@ -632,13 +632,14 @@ sub loop
                                         \$self->{_fhs}{$fh}{inbuffer})
                             if $obj && $obj->can("mux_input");
                     } else {
-                        next if
-                          $! == EINTR ||
-                          $! == EAGAIN ||
-                          $! == EWOULDBLOCK;
-                        warn "IO::Multiplex read error: $!"
-                          if (!defined($rv) &&
-                              $! != ECONNRESET);
+                        unless (defined $rv) {
+                            next if
+                                $! == EINTR ||
+                                $! == EAGAIN ||
+                                $! == EWOULDBLOCK;
+			    warn "IO::Multiplex read error: $!"
+                                if $! != ECONNRESET;
+                        }
                         # There's an error, or we received EOF.  If
                         # there's pending data to be written, we leave
                         # the connection open so it can be sent.  If
