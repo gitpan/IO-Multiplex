@@ -1,4 +1,4 @@
-README for IO::Multiplex 0.01
+README for IO::Multiplex
 
 IO::Multiplex is designed to take the effort out of managing
 multiple file handles.  It is essentially a really fancy front end to
@@ -20,7 +20,7 @@ function is called when the timer expires.
 Here's an example which implements the beginnings of a multiuser game:
 
     use IO::Socket;
-    use MVModule::MVmux;
+    use IO::Multiplex;
     use Tie::RefHash;
     
     my $mux  = new IO::Multiplex;

@@ -272,7 +272,7 @@ use Data::Dumper;
 use Tie::RefHash;
 use Carp qw(cluck);
     
-$VERSION = '0.05';
+$VERSION = '1.00';
 
 BEGIN {
     eval {
@@ -402,6 +402,8 @@ sub set_callback_object
     my $self = shift;
     my $obj  = shift;
     my $fh   = shift;
+    return if $fh && !exists($self->{_fhs}{$fh});
+                             
     my $old  = $fh ? $self->{_fhs}{$fh}{object} : $self->{_object};
 
     $fh ? $self->{_fhs}{$fh}{object} : $self->{_object} = $obj;
@@ -420,6 +422,7 @@ sub kill_output
 {
     my $self = shift;
     my $fh   = shift;
+    return unless $fh && exists($self->{_fhs}{$fh});
 
     $self->{_fhs}{$fh}{outbuffer} = '';
     fd_set($self->{_writers}, $fh, 0);
@@ -438,6 +441,7 @@ sub outbuffer
 {
     my $self = shift;
     my $fh   = shift;
+    return unless $fh && exists($self->{_fhs}{$fh});
 
     if (@_) {
         $self->{_fhs}{$fh}{outbuffer} = $_[0] if @_;
@@ -460,6 +464,7 @@ sub inbuffer
 {
     my $self = shift;
     my $fh   = shift;
+    return unless $fh && exists($self->{_fhs}{$fh});
 
     if (@_) {
         $self->{_fhs}{$fh}{inbuffer} = $_[0] if @_;
@@ -489,6 +494,7 @@ sub set_timeout
     my $self     = shift;
     my $fh       = shift;
     my $timeout  = shift;
+    return unless $fh && exists($self->{_fhs}{$fh});
 
     if (defined $timeout) {
         $self->{_fhs}{$fh}{timeout} = $timeout + time;
@@ -611,7 +617,8 @@ sub loop
                     }
                 }
             }  # end if readable
-        
+            next unless exists $self->{_fhs}{$fh};
+            
             if (fd_isset($wrready, $fh)) {
                 unless ($self->{_fhs}{$fh}{outbuffer}) {  # Shouldn't happen
                     fd_set($self->{_writers}, $fh, 0);
@@ -658,6 +665,9 @@ sub loop
                     }
                 }
             }  # End if writeable
+
+            next unless exists $self->{_fhs}{$fh};
+
             if ($self->{_fhs}{$fh}{timeout} &&
                 $self->{_fhs}{$fh}{timeout} < time &&
                 $obj && $obj->can("mux_timeout"))
@@ -698,6 +708,7 @@ sub write
     my $self = shift;
     my $fh   = shift;
     my $data = shift;
+    return unless $fh && exists($self->{_fhs}{$fh});
 
     if ($self->{_fhs}{$fh}{shutdown}) {
         $! = EPIPE;
@@ -726,6 +737,7 @@ sub shutdown
     my $self = shift;
     my $fh = shift;
     my $which = shift;
+    return unless $fh && exists($self->{_fhs}{$fh});
     
     if ($which == 0 || $which == 2) {
         # Shutdown for reading.  We can do this now.

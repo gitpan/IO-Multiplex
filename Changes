@@ -16,3 +16,15 @@ Revision history for Perl extension IO::Multiplex.
 
 0.05  Fri Oct  8 17:23:08 MDT 1999
         - Yet more EOF/close fixes
+
+0.06  Sun Oct 10 13:25:03 MDT 1999
+	- Fix autovivification evils
+
+0.07  Mon Oct 25 15:01:46 PDT 1999
+	- Fix documentation
+
+0.08  Thu Oct 28 16:06:33 MDT 1999
+        - More autovivification ailments
+
+1.00  Wed Feb 23 12:07:07 PST 2000
+	- Stable enough now.  Call it a release.
