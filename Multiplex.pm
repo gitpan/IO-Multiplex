@@ -272,7 +272,7 @@ use Data::Dumper;
 use Tie::RefHash;
 use Carp qw(cluck);
     
-$VERSION = '0.04';
+$VERSION = '0.05';
 
 BEGIN {
     eval {
@@ -584,6 +584,8 @@ sub loop
                     } else {
                         next if $! == EINTR || $! == EAGAIN
                             || $! == EWOULDBLOCK;
+                        warn "IO::Multiplex read error: $!"
+                            unless (defined($rv));
                         # There's an error, or we received EOF.  If
                         # there's pending data to be written, we leave
                         # the connection open so it can be sent.  If
@@ -602,7 +604,8 @@ sub loop
                             # The mux_eof handler could have responded
                             # with a shutdown for writing.
                             $self->close($fh)
-                                unless exists $self->{_fhs}{$fh}{outbuffer};
+                                unless exists $self->{_fhs}{$fh} &&
+                                    exists$self->{_fhs}{$fh}{outbuffer};
                         }
                         next;
                     }
@@ -624,9 +627,13 @@ sub loop
                     # EWOULDBLOCK (shouldn't happen if select told us
                     # we can write) or EAGAIN, or EINTR we don't worry
                     # about it.  otherwise, close it down.
-                    $self->close($fh) unless ($! == EWOULDBLOCK ||
-                                              $! == EINTR ||
-                                              $! == EAGAIN);
+                    
+                    unless ($! == EWOULDBLOCK ||
+                            $! == EINTR ||
+                            $! == EAGAIN) {
+                        warn "IO::Multiplex: write error: $!\n";
+                        $self->close($fh);
+                    }
                     next;
                 }
                 substr($self->{_fhs}{$fh}{outbuffer}, 0, $rv) = '';
@@ -757,6 +764,7 @@ sub close
 {
     my $self = shift;
     my $fh = shift;
+    return unless exists $self->{_fhs}{$fh};
     
     my $obj = $self->{_fhs}{$fh}{object} || $self->{_object};
     warn "closeing with read buffer" if $self->{_fhs}{$fh}{inbuffer};
