@@ -36,3 +36,8 @@ Revision history for Perl extension IO::Multiplex.
 	- Added tie FILENO method
 	- Fixed tie CLOSE and shutdown to flush both
           input {inbuffer} and output {outbuffer} correctly
+
+1.02  Tue Feb 05 13:05:00 MDT 2001
+	- Allow the rest of input buffer to be consumed
+	  when doing shutdown.
+	- Fix {_fhs} keys dereference race condition.

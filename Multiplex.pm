@@ -272,7 +272,7 @@ use Data::Dumper;
 use Tie::RefHash;
 use Carp qw(cluck);
 
-$VERSION = '1.01';
+$VERSION = '1.02';
 
 BEGIN {
     eval {
@@ -562,6 +562,11 @@ sub loop
         &{ $heartbeat } ($rdready, $wrready) if $heartbeat;
 
         foreach my $fh (keys %{$self->{_fhs}}) {
+            # Avoid creating a permanent empty hash ref for "$fh"
+            # by attempting to access its {object} element
+            # if it has already been closed.
+            next unless exists $self->{_fhs}{$fh};
+
             # Get the callback object.
             my $obj = $self->{_fhs}{$fh}{object} ||
                 $self->{_object};
@@ -813,7 +818,6 @@ sub nonblock
 sub fd_set
 {
      vec($_[0], fileno($_[1]), 1) = $_[2];
-#     vec($_[0], fileno($_[1]), 1) = $_[2] if fileno($_[1]);
 }
 
 sub fd_isset
