@@ -270,7 +270,7 @@ use IO::Handle;
 use Fcntl;
 use Carp qw(carp);
 
-$VERSION = '1.04';
+$VERSION = '1.05';
 
 BEGIN {
     eval {
@@ -348,6 +348,8 @@ sub add
     nonblock($fh);
     autoflush($fh, 1);
     fd_set($self->{_readers}, $fh, 1);
+    $self->{_fhs}{$fh}{udp_true} =
+        (SOCK_DGRAM == unpack("i", scalar getsockopt($fh,Socket::SOL_SOCKET(),Socket::SO_TYPE())));
     $self->{_fhs}{$fh}{inbuffer} = '';
     $self->{_fhs}{$fh}{outbuffer} = '';
     $self->{_fhs}{$fh}{fileno} = fileno($fh);
@@ -611,7 +613,15 @@ sub loop
                     $obj->mux_connection($self, $client)
                         if $obj && $obj->can("mux_connection");
                 } else {
-                    $rv = &POSIX::read(fileno($fh), $data, BUFSIZ);
+                    if ($self->is_udp($fh)) {
+                        $rv = recv($fh, $data, BUFSIZ, 0);
+                        if (defined $rv) {
+                            # Remember where the last UDP packet came from
+                            $self->{_fhs}{$fh}{udp_peer} = $rv;
+                        }
+                    } else {
+                        $rv = &POSIX::read(fileno($fh), $data, BUFSIZ);
+                    }
 
                     if (defined($rv) && length($data)) {
                         # Append the data to the client's receive buffer,
@@ -622,10 +632,13 @@ sub loop
                                         \$self->{_fhs}{$fh}{inbuffer})
                             if $obj && $obj->can("mux_input");
                     } else {
-                        next if $! == EINTR || $! == EAGAIN
-                            || $! == EWOULDBLOCK;
+                        next if
+                          $! == EINTR ||
+                          $! == EAGAIN ||
+                          $! == EWOULDBLOCK;
                         warn "IO::Multiplex read error: $!"
-                            unless (defined($rv));
+                          if (!defined($rv) &&
+                              $! != ECONNRESET);
                         # There's an error, or we received EOF.  If
                         # there's pending data to be written, we leave
                         # the connection open so it can be sent.  If
@@ -654,8 +667,10 @@ sub loop
             next unless exists $self->{_fhs}{$fh};
 
             if (fd_isset($wrready, $fh)) {
-                unless ($self->{_fhs}{$fh}{outbuffer}) {  # Shouldn't happen
+                unless ($self->{_fhs}{$fh}{outbuffer}) {
                     fd_set($self->{_writers}, $fh, 0);
+                    $obj->mux_outbuffer_empty($self, $fh)
+                        if ($obj && $obj->can("mux_outbuffer_empty"));
                     next;
                 }
                 $rv = &POSIX::write(fileno($fh),
@@ -701,7 +716,7 @@ sub loop
             next unless exists $self->{_fhs}{$fh};
 
         }  # End foreach $fh (...)
-     
+
         $self->_checkTimeouts() if @{$self->{_timers}};
 
     } # End while(loop)
@@ -752,6 +767,35 @@ sub endloop
     $self->{_endloop} = 1;
 }
 
+=head2 udp_peer
+
+Get peer endpoint of where the last udp packet originated.
+
+    $saddr = $mux->udp_peer($fh);
+
+=cut
+
+sub udp_peer {
+  my $self = shift;
+  my $fh = shift;
+  return $self->{_fhs}{$fh}{udp_peer};
+}
+
+=head2 is_udp
+
+Sometimes UDP packets require special attention.
+This method will tell if a file handle is of type UDP.
+
+    $is_udp = $mux->is_udp($fh);
+
+=cut
+
+sub is_udp {
+  my $self = shift;
+  my $fh = shift;
+  return $self->{_fhs}{$fh}{udp_true};
+}
+
 =head2 write
 
 Send output to a file handle.
@@ -770,6 +814,17 @@ sub write
     if ($self->{_fhs}{$fh}{shutdown}) {
         $! = EPIPE;
         return undef;
+    }
+    if ($self->is_udp($fh)) {
+        if (my $udp_peer = $self->udp_peer($fh)) {
+            # Send the packet back to the last peer that said something
+            return send($fh, $data, 0, $udp_peer);
+        } else {
+            # No udp_peer yet?
+            # This better be a connect()ed UDP socket
+            # or else this will fail with ENOTCONN
+            return send($fh, $data, 0);
+        }
     }
     $self->{_fhs}{$fh}{outbuffer} .= $data;
     fd_set($self->{_writers}, $fh, 1);
@@ -1008,6 +1063,8 @@ Called when a timer expires.
 =head1 AUTHOR
 
 Copyright 1999 Bruce J Keeler <bruce@gridpoint.com>
+
+Copyright 2001-2003 Rob Brown <bbb@cpan.org>
 
 Released under the terms of the Artistic License.
 
