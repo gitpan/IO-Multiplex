@@ -272,7 +272,7 @@ use Data::Dumper;
 use Tie::RefHash;
 use Carp qw(cluck);
     
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 BEGIN {
     eval {
@@ -602,7 +602,7 @@ sub loop
                             # The mux_eof handler could have responded
                             # with a shutdown for writing.
                             $self->close($fh)
-                                unless $self->{_fhs}{$fh}{outbuffer};
+                                unless exists $self->{_fhs}{$fh}{outbuffer};
                         }
                         next;
                     }

@@ -10,3 +10,6 @@ Revision history for Perl extension IO::Multiplex.
 	- Remove some debugging stuff
 	- Deal properly with the situation where a fd is shutdown in
 	  response to EOF
+
+0.04  Wed Sep 29 12:50:44 MDT 1999
+	- Fix yesterday's fix
