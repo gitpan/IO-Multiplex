@@ -105,7 +105,7 @@ rm -rf $HERE
 
 %files
 %defattr(-,root,root)
-%doc CHANGES README
+%doc README Changes
 %{_prefix}
 
 %changelog

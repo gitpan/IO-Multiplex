@@ -3,12 +3,12 @@
 
 ######################### We start with some black magic to print on failure.
 
-use Test;
-BEGIN { plan tests => 1; $loaded = 0}
-END { ok $loaded;}
+BEGIN { $| = 1; $loaded = 0; print "1..1\n"; }
+END { print "not ok 1\n" unless $loaded; }
 
 use IO::Multiplex;
 $loaded = 1;
+print "ok 1\n";
 
 ######################### End of black magic.
 

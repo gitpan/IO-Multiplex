@@ -266,11 +266,11 @@ use POSIX qw(errno_h BUFSIZ);
 use vars qw($VERSION);
 use Socket;
 use FileHandle qw(autoflush);
+use IO::Handle;
 use Fcntl;
-use Data::Dumper;
-use Carp qw(cluck);
+use Carp qw(carp);
 
-$VERSION = '1.03';
+$VERSION = '1.04';
 
 BEGIN {
     eval {
@@ -298,6 +298,8 @@ sub new
                        _writers     => '',
                        _fhs         => {},
                        _handles     => {},
+                       _timerkeys   => {},
+                       _timers      => [],
                        _listen      => {}  } => $package;
     $self;
 }
@@ -350,7 +352,7 @@ sub add
     $self->{_fhs}{$fh}{outbuffer} = '';
     $self->{_fhs}{$fh}{fileno} = fileno($fh);
     $self->{_handles}{$fh} = $fh;
-    tie *$fh, "MVModule::MVmux::Handle", $self, $fh;
+    tie *$fh, "IO::Multiplex::Handle", $self, $fh;
     $fh;
 }
 
@@ -372,6 +374,7 @@ sub remove
     fd_set($self->{_readers}, $fh, 0);
     delete $self->{_fhs}{$fh};
     delete $self->{_handles}{$fh};
+    $self->_removeTimer($fh);
     untie *$fh;
 }
 
@@ -497,9 +500,9 @@ sub set_timeout
     return unless $fh && exists($self->{_fhs}{$fh});
 
     if (defined $timeout) {
-        $self->{_fhs}{$fh}{timeout} = $timeout + time;
+        $self->_addTimer($fh, $timeout + time);
     } else {
-        $self->{_fhs}{$fh}{timeout} = undef;
+        $self->_removeTimer($fh);
     }
 }
 
@@ -518,6 +521,34 @@ sub handles
 
     grep(!$self->{_fhs}{$_}{listen}, values %{$self->{_handles}});
 }
+
+sub _addTimer {
+    my $self = shift;
+    my $fh   = shift;
+    my $time = shift;
+
+    # Set a key so that we can quickly tell if a given $fh has
+    # a timer set
+    $self->{_timerkeys}{$fh} = 1;
+
+    # Store the timeout in an array, and resort it
+    @{$self->{_timers}} = sort { $a->[1] <=> $b->[1] } (@{$self->{_timers}}, [ $fh, $time ] );
+}
+
+sub _removeTimer {
+    my $self = shift;
+    my $fh   = shift;
+
+    # Return quickly if no timer is set
+    return unless exists $self->{_timerkeys}{$fh};
+
+    # Remove the timeout from the sorted array
+    @{$self->{_timers}} = grep { $_->[0] ne $fh } @{$self->{_timers}};
+
+    # Get rid of the key
+    delete $self->{_timerkeys}{$fh};
+}
+
 
 =head2 loop
 
@@ -540,11 +571,8 @@ sub loop
         my $wrready;
         my $timeout = undef;
 
-        my @timeouts = sort { $a <=> $b } map {
-            defined $_->{timeout} ? $_->{timeout} : ()
-        } values %{$self->{_fhs}};
-        if (@timeouts) {
-            $timeout = $timeouts[0] - time;
+        if (@{$self->{_timers}}) {
+            $timeout = $self->{_timers}[0][1] - time;
         }
 
         my $numready = select($rdready=$self->{_readers},
@@ -583,9 +611,7 @@ sub loop
                     $obj->mux_connection($self, $client)
                         if $obj && $obj->can("mux_connection");
                 } else {
-                    # Have to alias the glob to avoid the tie
-                    local *FOO = *$fh;
-                    $rv = sysread(FOO, $data, BUFSIZ);
+                    $rv = &POSIX::read(fileno($fh), $data, BUFSIZ);
 
                     if (defined($rv) && length($data)) {
                         # Append the data to the client's receive buffer,
@@ -632,11 +658,9 @@ sub loop
                     fd_set($self->{_writers}, $fh, 0);
                     next;
                 }
-                # Can't just syswrite directly to $fh, or it would call
-                # the tied write.
-                local *FOO = *$fh;
-                $rv = syswrite(FOO, $self->{_fhs}{$fh}{outbuffer},
-                               length($self->{_fhs}{$fh}{outbuffer}));
+                $rv = &POSIX::write(fileno($fh),
+                                    $self->{_fhs}{$fh}{outbuffer},
+                                    length($self->{_fhs}{$fh}{outbuffer}));
                 unless (defined($rv)) {
                     # We got an error writing to it.  If it's
                     # EWOULDBLOCK (shouldn't happen if select told us
@@ -676,17 +700,42 @@ sub loop
 
             next unless exists $self->{_fhs}{$fh};
 
-            if ($self->{_fhs}{$fh}{timeout} &&
-                $self->{_fhs}{$fh}{timeout} < time &&
-                $obj && $obj->can("mux_timeout"))
-            {
-                $self->{_fhs}{$fh}{timeout} = undef;
-                $obj->mux_timeout($self, $fh);
-            }
-
         }  # End foreach $fh (...)
+     
+        $self->_checkTimeouts() if @{$self->{_timers}};
+
     } # End while(loop)
 }
+
+sub _checkTimeouts {
+    my $self = shift;
+
+    # Get the current time
+    my $time = time;
+
+    # Copy all of the timers that should go off into
+    # a temporary array. This allows us to modify the
+    # real array as we process the timers, without
+    # interfering with the loop.
+
+    my @timers = ();
+    foreach my $timer (@{$self->{_timers}}) {
+        # If the timer is in the future, we can stop
+        last if $timer->[1] > $time;
+        push @timers, $timer;
+    }
+
+    foreach my $timer (@timers) {
+        my $fh = $timer->[0];
+        $self->_removeTimer($fh);
+
+        next unless exists $self->{_fhs}{$fh};
+
+        my $obj = $self->{_fhs}{$fh}{object} || $self->{_object};
+        $obj->mux_timeout($self, $fh) if $obj && $obj->can("mux_timeout");
+    }
+}
+
 
 =head2 endloop
 
@@ -827,8 +876,9 @@ sub fd_isset
 
 # We tie handles into this package to handle write buffering.
 
-package MVModule::MVmux::Handle;
+package IO::Multiplex::Handle;
 
+use strict;
 use Tie::Handle;
 use Carp;
 use vars qw(@ISA);
