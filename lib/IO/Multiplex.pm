@@ -270,7 +270,7 @@ use IO::Handle;
 use Fcntl;
 use Carp qw(carp);
 
-$VERSION = '1.08';
+$VERSION = '1.09';
 
 BEGIN {
     eval {
@@ -569,29 +569,40 @@ sub loop
     while (!$self->{_endloop} && keys %{$self->{_fhs}}) {
         my $rv;
         my $data;
-        my $rdready;
-        my $wrready;
+        my $rdready = "";
+        my $wrready = "";
         my $timeout = undef;
 
-        if (@{$self->{_timers}}) {
-            $timeout = $self->{_timers}[0][1] - time;
+        foreach my $fh (values %{$self->{_handles}}) {
+            fd_set($rdready, $fh, 1) if
+                ref($fh) =~ /SSL/ &&
+                $fh->can("pending") &&
+                $fh->pending;
         }
 
-        my $numready = select($rdready=$self->{_readers},
-                              $wrready=$self->{_writers},
-                              undef,
-                              $timeout);
+        if (!length $rdready) {
+            if (@{$self->{_timers}}) {
+                $timeout = $self->{_timers}[0][1] - time;
+            }
 
-        unless(defined($numready)) {
-            if ($! == EINTR || $! == EAGAIN) {
-                next;
-            } else {
-                last;
+            my $numready = select($rdready=$self->{_readers},
+                                  $wrready=$self->{_writers},
+                                  undef,
+                                  $timeout);
+
+            unless(defined($numready)) {
+                if ($! == EINTR || $! == EAGAIN) {
+                    next;
+                } else {
+                    last;
+                }
             }
         }
+
         &{ $heartbeat } ($rdready, $wrready) if $heartbeat;
 
-        foreach my $fh (values %{$self->{_handles}}) {
+        foreach my $k (keys %{$self->{_handles}}) {
+            my $fh = $self->{_handles}->{$k} or next;
             # Avoid creating a permanent empty hash ref for "$fh"
             # by attempting to access its {object} element
             # if it has already been closed.
@@ -1073,5 +1084,7 @@ Copyright 1999 Bruce J Keeler <bruce@gridpoint.com>
 Copyright 2001-2003 Rob Brown <bbb@cpan.org>
 
 Released under the terms of the Artistic License.
+
+$Id: Multiplex.pm,v 1.33 2007/03/04 05:39:16 rob Exp $
 
 =cut
