@@ -269,8 +269,9 @@ use FileHandle qw(autoflush);
 use IO::Handle;
 use Fcntl;
 use Carp qw(carp);
+use constant IsWin => ($^O =~ /Win32/i);
 
-$VERSION = '1.09';
+$VERSION = '1.10';
 
 BEGIN {
     eval {
@@ -928,6 +929,7 @@ sub close
 
 sub nonblock
 {
+    return 1 if IsWin;
     my $fh = shift;
     my $flags = fcntl($fh, F_GETFL, 0)
         or die "fcntl F_GETFL: $!\n";
@@ -1081,10 +1083,10 @@ Called when a timer expires.
 
 Copyright 1999 Bruce J Keeler <bruce@gridpoint.com>
 
-Copyright 2001-2003 Rob Brown <bbb@cpan.org>
+Copyright 2001-2008 Rob Brown <bbb@cpan.org>
 
-Released under the terms of the Artistic License.
+Released under the same terms as Perl itself.
 
-$Id: Multiplex.pm,v 1.33 2007/03/04 05:39:16 rob Exp $
+$Id: Multiplex.pm,v 1.36 2008/09/15 08:17:50 rob Exp $
 
 =cut

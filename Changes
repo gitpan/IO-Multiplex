@@ -1,5 +1,9 @@
 Revision history for Perl extension IO::Multiplex.
 
+1.10  Mon Sep 15 2008
+	- Update Copyright and License.
+	- Buttwag around minor Windows deficiencies.
+
 1.09  Sat Mar 03 2007
 	- Detect readability for special IO::Socket::SSL
 	  handles more accurately.
