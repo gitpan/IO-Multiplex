@@ -20,6 +20,8 @@ use IO::Socket;
 use IO::Multiplex;
 use POSIX qw(ENOTCONN EDESTADDRREQ);
 
+if($^O eq 'MSWin32') { *ENOTCONN = sub(){10057} }
+
 $| = 1;
 plan tests => 15;
 

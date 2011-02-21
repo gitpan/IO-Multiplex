@@ -1,5 +1,10 @@
 package IO::Multiplex;
 
+use strict;
+use warnings;
+
+our $VERSION = '1.11';
+
 =head1 NAME
 
 IO::Multiplex - Manage IO on many file handles
@@ -15,13 +20,11 @@ IO::Multiplex - Manage IO on many file handles
   $mux->listen($server_socket);
   $mux->loop;
 
-  sub mux_input {
-    ...
-  }
+  sub mux_input { ... }
 
 C<IO::Multiplex> is designed to take the effort out of managing
-multiple file handles.  It is essentially a really fancy front end to
-the C<select> system call.  In addition to maintaining the C<select>
+multiple file handles. It is essentially a really fancy front end to
+the C<select> system call. In addition to maintaining the C<select>
 loop, it buffers all input and output to/from the file handles.  It
 can also accept incoming connections on one or more listen sockets.
 
@@ -261,28 +264,27 @@ have a Player object for each player.
 
 =cut
 
-use strict;
 use POSIX qw(errno_h BUFSIZ);
-use vars qw($VERSION);
 use Socket;
 use FileHandle qw(autoflush);
 use IO::Handle;
 use Fcntl;
 use Carp qw(carp);
-use constant IsWin => ($^O =~ /Win32/i);
+use constant IsWin => ($^O eq 'MSWin32');
 
-$VERSION = '1.10';
 
 BEGIN {
     eval {
         # Can optionally use Hi Res timers if available
         require Time::HiRes;
-        Time::HiRes->import ('time');
+        Time::HiRes->import('time');
     }
 };
 
 # This is what you want.  Trust me.
 $SIG{PIPE} = 'IGNORE';
+
+if(IsWin) { *EWOULDBLOCK = sub {10035} }
 
 =head2 new
 
@@ -326,6 +328,7 @@ sub listen
 
     $self->add($fh);
     $self->{_fhs}{"$fh"}{listen} = 1;
+    $fh;
 }
 
 =head2 add
@@ -349,8 +352,11 @@ sub add
     nonblock($fh);
     autoflush($fh, 1);
     fd_set($self->{_readers}, $fh, 1);
-    $self->{_fhs}{"$fh"}{udp_true} =
-        (SOCK_DGRAM == unpack("i", scalar getsockopt($fh,Socket::SOL_SOCKET(),Socket::SO_TYPE())));
+
+    my $sockopt = getsockopt $fh, SOL_SOCKET, SO_TYPE;
+    $self->{_fhs}{"$fh"}{udp_true} = 1
+        if defined $sockopt && SOCK_DGRAM == unpack "i", $sockopt;
+
     $self->{_fhs}{"$fh"}{inbuffer} = '';
     $self->{_fhs}{"$fh"}{outbuffer} = '';
     $self->{_fhs}{"$fh"}{fileno} = fileno($fh);
@@ -666,12 +672,12 @@ sub loop
                             if $obj && $obj->can("mux_eof");
 
                         if (exists $self->{_fhs}{"$fh"}) {
-                            delete $self->{_fhs}{"$fh"}{inbuffer};
+                            $self->{_fhs}{"$fh"}{inbuffer} = '';
                             # The mux_eof handler could have responded
                             # with a shutdown for writing.
                             $self->close($fh)
-                                unless exists $self->{_fhs}{"$fh"} &&
-                                    exists $self->{_fhs}{"$fh"}{outbuffer};
+                                unless exists $self->{_fhs}{"$fh"}
+                                    && length $self->{_fhs}{"$fh"}{outbuffer};
                         }
                         next;
                     }
@@ -708,19 +714,20 @@ sub loop
                     next;
                 }
                 substr($self->{_fhs}{"$fh"}{outbuffer}, 0, $rv) = '';
-                unless ($self->{_fhs}{"$fh"}{outbuffer}) {
+                unless (length $self->{_fhs}{"$fh"}{outbuffer}) {
                     # Mark us as not writable if there's nothing more to
                     # write
                     fd_set($self->{_writers}, $fh, 0);
                     $obj->mux_outbuffer_empty($self, $fh)
                         if ($obj && $obj->can("mux_outbuffer_empty"));
 
-                    if ($self->{_fhs}{"$fh"}{shutdown}) {
+                    if (   $self->{_fhs}{"$fh"}
+                        && $self->{_fhs}{"$fh"}{shutdown}) {
                         # If we've been marked for shutdown after write
                         # do it.
                         shutdown($fh, 1);
-                        delete $self->{_fhs}{"$fh"}{outbuffer};
-                        unless (exists $self->{_fhs}{"$fh"}{inbuffer}) {
+                        $self->{_fhs}{"$fh"}{outbuffer} = '';
+                        unless (length $self->{_fhs}{"$fh"}{inbuffer}) {
                             # We'd previously been shutdown for reading
                             # also, so close out completely
                             $self->close($fh);
@@ -879,16 +886,16 @@ sub shutdown
     if ($which == 1 || $which == 2) {
         # Shutdown for writing.  Only do this now if there is no pending
         # data.
-        if ($self->{_fhs}{"$fh"}{outbuffer}) {
+        if(length $self->{_fhs}{"$fh"}{outbuffer}) {
             $self->{_fhs}{"$fh"}{shutdown} = 1;
         } else {
             shutdown($fh, 1);
-            delete $self->{_fhs}{"$fh"}{outbuffer};
+            $self->{_fhs}{"$fh"}{outbuffer} = '';
         }
     }
     # Delete the descriptor if it's totally gone.
-    unless (exists $self->{_fhs}{"$fh"}{inbuffer} ||
-            exists $self->{_fhs}{"$fh"}{outbuffer}) {
+    unless (length $self->{_fhs}{"$fh"}{inbuffer} ||
+            length $self->{_fhs}{"$fh"}{outbuffer}) {
         $self->close($fh);
     }
 }
@@ -909,8 +916,8 @@ sub close
     return unless exists $self->{_fhs}{"$fh"};
 
     my $obj = $self->{_fhs}{"$fh"}{object} || $self->{_object};
-    warn "closeing with read buffer" if $self->{_fhs}{"$fh"}{inbuffer};
-    warn "closeing with write buffer" if $self->{_fhs}{"$fh"}{outbuffer};
+    warn "closing with read buffer"  if length $self->{_fhs}{"$fh"}{inbuffer};
+    warn "closing with write buffer" if length $self->{_fhs}{"$fh"}{outbuffer};
 
     fd_set($self->{_readers}, $fh, 0);
     fd_set($self->{_writers}, $fh, 0);
@@ -928,13 +935,17 @@ sub close
 # get a partial write in those circumstances, which is what we want.
 
 sub nonblock
-{
-    return 1 if IsWin;
-    my $fh = shift;
-    my $flags = fcntl($fh, F_GETFL, 0)
-        or die "fcntl F_GETFL: $!\n";
-    fcntl($fh, F_SETFL, $flags | O_NONBLOCK)
-        or die "fcntl F_SETFL $!\n";
+{   my $fh = shift;
+
+    if(IsWin)
+    {   ioctl($fh, 0x8004667e, 1);
+    }
+    else
+    {   my $flags = fcntl($fh, F_GETFL, 0)
+            or die "fcntl F_GETFL: $!\n";
+        fcntl($fh, F_SETFL, $flags | O_NONBLOCK)
+            or die "fcntl F_SETFL $!\n";
+    }
 }
 
 sub fd_set
