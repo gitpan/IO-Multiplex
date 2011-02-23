@@ -58,10 +58,16 @@ $mux->remove($server_socket);
 print "ok 10\n";
 
 my $flags = 0;
-fcntl($server_socket, F_GETFL, $flags)
-    or die "fcntl F_GETFL: $!\n";
-fcntl($server_socket, F_SETFL, $flags & ~O_NONBLOCK)
-    or die "fcntl F_SETFL $!\n";
+
+if($^O eq 'MSWin32')
+{   ioctl($server_socket, 0x8004667e, pack("L!", 0));
+}
+else
+{   fcntl($server_socket, F_GETFL, $flags)
+        or die "fcntl F_GETFL: $!\n";
+    fcntl($server_socket, F_SETFL, $flags & ~O_NONBLOCK)
+        or die "fcntl F_SETFL $!\n";
+}
 
 if (syswrite ($client_socket, $test_msg1, length $test_msg1) == 10) {
     print "ok 11\n";

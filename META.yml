@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               IO-Multiplex
-version:            1.11
+version:            1.12
 abstract:           Manage IO on many file handles
 author:  []
 license:            unknown

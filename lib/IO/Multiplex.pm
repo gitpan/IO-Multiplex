@@ -3,7 +3,7 @@ package IO::Multiplex;
 use strict;
 use warnings;
 
-our $VERSION = '1.11';
+our $VERSION = '1.12';
 
 =head1 NAME
 
@@ -278,13 +278,15 @@ BEGIN {
         # Can optionally use Hi Res timers if available
         require Time::HiRes;
         Time::HiRes->import('time');
-    }
-};
+    };
+}
 
 # This is what you want.  Trust me.
 $SIG{PIPE} = 'IGNORE';
 
-if(IsWin) { *EWOULDBLOCK = sub {10035} }
+{   no warnings;
+    if(IsWin) { *EWOULDBLOCK = sub() {10035} }
+}
 
 =head2 new
 
@@ -938,7 +940,7 @@ sub nonblock
 {   my $fh = shift;
 
     if(IsWin)
-    {   ioctl($fh, 0x8004667e, 1);
+    {   ioctl($fh, 0x8004667e, pack("L!", 1));
     }
     else
     {   my $flags = fcntl($fh, F_GETFL, 0)

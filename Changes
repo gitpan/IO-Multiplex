@@ -1,5 +1,9 @@
 Revision history for Perl extension IO::Multiplex.
 
+1.12 Wed Feb 23 22:35:27 CET 2011
+	- fix MSWin32 complaints
+	  rt.cpan.org#66096 [Mark Dootson]
+
 1.11 Wed Feb  2 17:05:08 CET 2011
         - Avoid warning while adding pipe
           rt.cpan.org#60068 [Khedin] and #16259
