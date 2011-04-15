@@ -1,5 +1,9 @@
 Revision history for Perl extension IO::Multiplex.
 
+1.13 Fri Apr 15 08:42:43 CEST 2011
+	- fix handling of outbuf which contains '0'.
+	  rt.cpan.org#67458 [Gordon Russell]
+
 1.12 Wed Feb 23 22:35:27 CET 2011
 	- fix MSWin32 complaints
 	  rt.cpan.org#66096 [Mark Dootson]

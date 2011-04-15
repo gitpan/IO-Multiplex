@@ -3,7 +3,7 @@ package IO::Multiplex;
 use strict;
 use warnings;
 
-our $VERSION = '1.12';
+our $VERSION = '1.13';
 
 =head1 NAME
 
@@ -462,7 +462,7 @@ sub outbuffer
         fd_set($self->{_writers}, $fh, 0) if !$_[0];
     }
 
-    return $self->{_fhs}{"$fh"}{outbuffer};
+    $self->{_fhs}{"$fh"}{outbuffer};
 }
 
 =head2 inbuffer
@@ -612,10 +612,15 @@ sub loop
 
         foreach my $k (keys %{$self->{_handles}}) {
             my $fh = $self->{_handles}->{$k} or next;
+
             # Avoid creating a permanent empty hash ref for "$fh"
             # by attempting to access its {object} element
             # if it has already been closed.
             next unless exists $self->{_fhs}{"$fh"};
+
+            # It is not easy to replace $self->{_fhs}{"$fh"} with a
+            # variable, because some mux_* routines may remove it as
+            # side-effect.
 
             # Get the callback object.
             my $obj = $self->{_fhs}{"$fh"}{object} ||
@@ -688,7 +693,7 @@ sub loop
             next unless exists $self->{_fhs}{"$fh"};
 
             if (fd_isset($wrready, $fh)) {
-                unless ($self->{_fhs}{"$fh"}{outbuffer}) {
+                unless (length $self->{_fhs}{"$fh"}{outbuffer}) {
                     fd_set($self->{_writers}, $fh, 0);
                     $obj->mux_outbuffer_empty($self, $fh)
                         if ($obj && $obj->can("mux_outbuffer_empty"));
